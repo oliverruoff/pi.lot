@@ -1,6 +1,6 @@
 # pi.lot
 
-Version 1 Telegram bridge for the pi coding agent using `pi --mode rpc`.
+Version 1 of the AI assistant pi.lot, basically a Telegram bridge for the pi coding agent using `pi --mode rpc`.
 
 ![img](pi.lot_icon.png)
 
