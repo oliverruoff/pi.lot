@@ -4,6 +4,10 @@ set -Eeuo pipefail
 # Full update + deployment script for pi.lot.
 # Usage:
 #   ./deploy.sh
+#
+# If this script is run from inside a pi.lot checkout, that checkout is updated.
+# If this script is run elsewhere, the repo is cloned into ./pi.lot by default.
+#
 # Optional overrides:
 #   REPO_URL=https://github.com/oliverruoff/pi.lot.git APP_DIR=/opt/pi.lot ./deploy.sh
 
@@ -16,8 +20,25 @@ RESTART_POLICY="${RESTART_POLICY:-unless-stopped}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-30}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="${APP_DIR:-$SCRIPT_DIR}"
-ENV_FILE="${ENV_FILE:-$APP_DIR/.env}"
+
+if [ -z "${APP_DIR:-}" ]; then
+  if [ -d "$SCRIPT_DIR/.git" ] || [ -f "$SCRIPT_DIR/Dockerfile" ]; then
+    APP_DIR="$SCRIPT_DIR"
+  else
+    APP_DIR="$SCRIPT_DIR/pi.lot"
+  fi
+fi
+
+if [ -z "${ENV_FILE:-}" ]; then
+  if [ -f "$APP_DIR/.env" ]; then
+    ENV_FILE="$APP_DIR/.env"
+  elif [ -f "$SCRIPT_DIR/.env" ]; then
+    ENV_FILE="$SCRIPT_DIR/.env"
+  else
+    ENV_FILE="$APP_DIR/.env"
+  fi
+fi
+
 WORKSPACE_DIR="${WORKSPACE_DIR:-$APP_DIR/workspace}"
 BACKUP_DIR="${BACKUP_DIR:-$APP_DIR/backups}"
 BACKUP_ENABLED="${BACKUP_ENABLED:-true}"
@@ -31,6 +52,9 @@ need git
 need docker
 
 if [ ! -d "$APP_DIR/.git" ]; then
+  if [ -e "$APP_DIR" ] && [ "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 2>/dev/null | head -n 1)" ]; then
+    fail "$APP_DIR exists but is not a git checkout and is not empty. Set APP_DIR to an empty/new directory, e.g. APP_DIR=$SCRIPT_DIR/pi.lot ./deploy.sh"
+  fi
   log "Cloning $REPO_URL into $APP_DIR"
   mkdir -p "$(dirname "$APP_DIR")"
   git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
