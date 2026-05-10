@@ -11,6 +11,7 @@ RUN apt-get update \
         openssh-client \
         openssh-server \
         ca-certificates \
+        tzdata \
         cron \
         nodejs \
         npm \

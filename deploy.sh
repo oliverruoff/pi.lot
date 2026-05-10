@@ -42,6 +42,8 @@ fi
 
 WORKSPACE_DIR="${WORKSPACE_DIR:-$APP_DIR/workspace}"
 BACKUP_DIR="${BACKUP_DIR:-$APP_DIR/backups}"
+LOCALTIME_FILE="${LOCALTIME_FILE:-/etc/localtime}"
+TIMEZONE_FILE="${TIMEZONE_FILE:-/etc/timezone}"
 BACKUP_ENABLED="${BACKUP_ENABLED:-true}"
 DOCKER_RUN_ARGS="${DOCKER_RUN_ARGS:-}"
 
@@ -92,15 +94,25 @@ if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
   docker rm "$CONTAINER_NAME" >/dev/null || true
 fi
 
-log "Starting new container $CONTAINER_NAME"
+TZ_ARGS=(-e TZ="$CONTAINER_TZ")
+if [ -f "$LOCALTIME_FILE" ]; then
+  TZ_ARGS+=(-v "$LOCALTIME_FILE:/etc/localtime:ro")
+else
+  log "WARNING: $LOCALTIME_FILE not found; relying on TZ=$CONTAINER_TZ"
+fi
+if [ -f "$TIMEZONE_FILE" ]; then
+  TZ_ARGS+=(-v "$TIMEZONE_FILE:/etc/timezone:ro")
+else
+  log "WARNING: $TIMEZONE_FILE not found; relying on TZ=$CONTAINER_TZ"
+fi
+
+log "Starting new container $CONTAINER_NAME with timezone $CONTAINER_TZ"
 # shellcheck disable=SC2086 # DOCKER_RUN_ARGS is intentionally word-split for optional extra docker args.
 docker run -d \
   --name "$CONTAINER_NAME" \
   --restart "$RESTART_POLICY" \
   --env-file "$ENV_FILE" \
-  -e TZ="$CONTAINER_TZ" \
-  -v /etc/localtime:/etc/localtime:ro \
-  -v /etc/timezone:/etc/timezone:ro \
+  "${TZ_ARGS[@]}" \
   -v "$WORKSPACE_DIR:/workspace" \
   $DOCKER_RUN_ARGS \
   "${IMAGE_NAME}:${IMAGE_TAG}"
