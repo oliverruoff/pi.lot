@@ -60,7 +60,8 @@ def persist_config(cfg: Config) -> None:
 
 def load_config() -> Config:
     load_dotenv()
-    data_dir = os.getenv("PILOT_DATA_DIR", "/data")
+    data_dir = os.getenv("PILOT_DATA_DIR", "/workspace/data")
+    os.environ.setdefault("PI_CODING_AGENT_SESSION_DIR", str(Path(data_dir) / "pi-sessions"))
     persisted = _load_persisted_config(data_dir)
 
     token = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or persisted.get("telegram_bot_token")

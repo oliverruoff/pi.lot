@@ -24,6 +24,6 @@ RUN pip install -r requirements.txt
 COPY pilot ./pilot
 COPY pilot/skills /root/.agents/skills
 
-RUN mkdir -p /data
+RUN mkdir -p /workspace/data
 
 CMD ["sh", "-c", "cron && python /root/.agents/skills/cronjobs/scripts/cron_cli.py sync || true; python -m pilot"]

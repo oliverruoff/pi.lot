@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DATA_DIR = Path(os.getenv("PILOT_DATA_DIR", "/data"))
+DATA_DIR = Path(os.getenv("PILOT_DATA_DIR", "/workspace/data"))
 CRONJOBS_FILE = DATA_DIR / "cronjobs.json"
 PROMPT_INBOX_DIR = DATA_DIR / "prompt_inbox"
 LOG_FILE = DATA_DIR / "pilot-cron.log"
