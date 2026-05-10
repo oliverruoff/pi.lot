@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from telegram import Update
@@ -37,6 +39,12 @@ class ReplyHandle:
     last_update: float = 0.0
 
 
+@dataclass
+class WorkItem:
+    prompt: str
+    cronjob_id: str | None = None
+
+
 class PilotApp:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -44,7 +52,7 @@ class PilotApp:
         self.main_chat_id: int | None = None
         self.pi = PiRPC(cfg.pi_command, cfg.pi_args, cfg.workdir, self.on_pi_event)
         self.app: Application | None = None
-        self.queue: asyncio.Queue[str] = asyncio.Queue()
+        self.queue: asyncio.Queue[WorkItem] = asyncio.Queue()
         self.busy = False
         self.current_reply: ReplyHandle | None = None
         self.current_text = ""
@@ -55,13 +63,17 @@ class PilotApp:
         self.sessions: dict[int, str] = {}
         self.active_session_no: int | None = None
         self.pending_ui: dict[str, Any] | None = None
+        self.auth_file = Path(cfg.data_dir) / "auth.json"
+        self.prompt_inbox_dir = Path(cfg.data_dir) / "prompt_inbox"
 
     async def run(self) -> None:
+        self._load_auth()
         await self.pi.start()
         await self._remember_current_session()
         self.app = ApplicationBuilder().token(self.cfg.telegram_bot_token).build()
         self.app.add_handler(MessageHandler(filters.ALL, self.on_update))
         asyncio.create_task(self.worker())
+        asyncio.create_task(self.prompt_inbox_watcher())
         await self.app.initialize()
         await self.app.start()
         await self.app.updater.start_polling()  # type: ignore[union-attr]
@@ -76,6 +88,7 @@ class PilotApp:
         if self.main_user_id is None:
             self.main_user_id = user_id
             self.main_chat_id = chat_id
+            self._save_auth()
             await context.bot.send_message(chat_id, "pi.lot started. You are now the authorized user.")
         elif user_id != self.main_user_id:
             await context.bot.send_message(chat_id, "This pi.lot instance is already bound to another user.")
@@ -93,7 +106,7 @@ class PilotApp:
         if text.startswith("/") and await self._handle_pilot_command(text, context):
             return
 
-        await self.queue.put(text)
+        await self.queue.put(WorkItem(text))
         if self.busy:
             await context.bot.send_message(chat_id, f"Queued ({self.queue.qsize()} pending).")
 
@@ -161,26 +174,47 @@ class PilotApp:
 
     async def worker(self) -> None:
         while True:
-            prompt = await self.queue.get()
+            item = await self.queue.get()
             self.busy = True
             self.current_text = ""
             self.current_thinking = ""
             self.current_status = ""
+            previous_active = self.active_session_no
+            restored_active = False
             try:
-                if self.inject_behavior_next:
+                prompt = item.prompt
+                if item.cronjob_id:
+                    await self.pi.new_session()
+                    await self._remember_current_session(make_active=False)
+                    prompt = f"{self.behavior_prompt}\n\nUser prompt:\n{prompt}"
+                elif self.inject_behavior_next:
                     prompt = f"{self.behavior_prompt}\n\nUser prompt:\n{prompt}"
                     self.inject_behavior_next = False
                 if self.main_chat_id and self.app:
                     msg = await self.app.bot.send_message(self.main_chat_id, "Thinking…")
                     self.current_reply = ReplyHandle(self.main_chat_id, msg.message_id)
                 await self.pi.prompt_and_wait(prompt, streaming_behavior="followUp")
-                await self._remember_current_session()
+                await self._remember_current_session(make_active=not bool(item.cronjob_id))
                 final = self.current_text.strip() or self.current_status.strip() or "No assistant output was returned."
                 await self.update_reply(final, force=True)
+                if item.cronjob_id:
+                    self._mark_prompt_status(item.cronjob_id, "success")
+                    if previous_active and previous_active in self.sessions:
+                        await self.pi.switch_session(self.sessions[previous_active])
+                        self.active_session_no = previous_active
+                        restored_active = True
             except Exception as e:
                 log.exception("prompt failed")
+                if item.cronjob_id:
+                    self._mark_prompt_status(item.cronjob_id, f"error: {e}")
                 await self.update_reply(f"Error: {e}", force=True)
             finally:
+                if item.cronjob_id and not restored_active and previous_active and previous_active in self.sessions:
+                    try:
+                        await self.pi.switch_session(self.sessions[previous_active])
+                        self.active_session_no = previous_active
+                    except Exception:
+                        log.exception("failed to restore active session after cronjob")
                 self.current_reply = None
                 self.busy = False
                 self.queue.task_done()
@@ -330,7 +364,75 @@ class PilotApp:
         except (BadRequest, TimedOut) as e:
             log.warning("telegram update failed: %s", e)
 
-    async def _remember_current_session(self) -> None:
+    async def prompt_inbox_watcher(self) -> None:
+        self.prompt_inbox_dir.mkdir(parents=True, exist_ok=True)
+        while True:
+            try:
+                for path in sorted(self.prompt_inbox_dir.glob("*.json")):
+                    if self.main_chat_id is None:
+                        break
+                    try:
+                        data = json.loads(path.read_text(encoding="utf-8"))
+                        prompt = str(data.get("prompt") or "")
+                        if not prompt.strip():
+                            raise ValueError("prompt inbox item has no prompt")
+                        source_id = str(data.get("id") or "") or None
+                        await self.queue.put(WorkItem(prompt, cronjob_id=source_id if data.get("source") == "cronjobs-skill" else None))
+                        path.unlink(missing_ok=True)
+                        if self.app and data.get("title"):
+                            await self.app.bot.send_message(self.main_chat_id, str(data["title"]))
+                    except Exception as e:
+                        log.exception("failed to process prompt inbox item %s", path)
+                        try:
+                            path.rename(path.with_suffix(".error"))
+                        except Exception:
+                            pass
+                        if self.main_chat_id and self.app:
+                            await self.app.bot.send_message(self.main_chat_id, f"Prompt inbox error: {e}")
+            except Exception:
+                log.exception("prompt inbox watcher failed")
+            await asyncio.sleep(2)
+
+    def _mark_prompt_status(self, item_id: str, status: str) -> None:
+        # Generic best-effort status update for prompt inbox producers that use
+        # /data/cronjobs.json-like records. Kept generic so skills stay
+        # self-contained and pilot does not import skill code.
+        try:
+            path = Path(self.cfg.data_dir) / "cronjobs.json"
+            if not path.exists():
+                return
+            data = json.loads(path.read_text(encoding="utf-8"))
+            jobs = data if isinstance(data, list) else data.get("cronjobs", [])
+            for job in jobs:
+                if job.get("id") == item_id:
+                    job["last_status"] = status[:1000]
+                    from datetime import datetime, timezone
+                    job["last_run_at"] = datetime.now(timezone.utc).isoformat()
+                    job["updated_at"] = job["last_run_at"]
+                    tmp = path.with_suffix(".json.tmp")
+                    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    tmp.replace(path)
+                    return
+        except Exception:
+            log.exception("failed to update prompt status")
+
+    def _load_auth(self) -> None:
+        try:
+            if self.auth_file.exists():
+                data = json.loads(self.auth_file.read_text(encoding="utf-8"))
+                self.main_user_id = int(data["user_id"])
+                self.main_chat_id = int(data["chat_id"])
+        except Exception:
+            log.exception("failed to load auth file")
+
+    def _save_auth(self) -> None:
+        try:
+            self.auth_file.parent.mkdir(parents=True, exist_ok=True)
+            self.auth_file.write_text(json.dumps({"user_id": self.main_user_id, "chat_id": self.main_chat_id}) + "\n", encoding="utf-8")
+        except Exception:
+            log.exception("failed to save auth file")
+
+    async def _remember_current_session(self, make_active: bool = True) -> None:
         try:
             state = await self.pi.get_state()
         except Exception:
@@ -340,11 +442,13 @@ class PilotApp:
             return
         for no, existing in self.sessions.items():
             if existing == path:
-                self.active_session_no = no
+                if make_active:
+                    self.active_session_no = no
                 return
         no = max(self.sessions.keys(), default=0) + 1
         self.sessions[no] = path
-        self.active_session_no = no
+        if make_active:
+            self.active_session_no = no
 
     async def _handle_extension_ui_request(self, event: dict[str, Any]) -> None:
         if not self.main_chat_id or not self.app:

@@ -65,7 +65,7 @@ Natural-language scheduling is expected for the user interface, but persisted cr
 
 ## User interface
 
-Preferred: standalone pi skill exposing cronjob commands/tools to pi.
+Preferred: standalone, Agent Skills-compatible pi skill exposing cronjob commands/tools to pi. The skill must be self-contained: its scripts live inside the skill folder and do not import pi.lot application modules.
 
 The Telegram user can ask naturally, for example:
 
@@ -143,27 +143,20 @@ Best-case standalone skill responsibilities:
 - Parse user intent for cronjob management.
 - Convert natural-language schedules into explicit cron expressions.
 - Validate or normalize schedules.
-- Call small pi.lot cron management tools/functions.
+- Call its bundled `scripts/cron_cli.py` helper.
 - Return concise confirmations and lists.
 
-The skill should not independently run Telegram or pi sessions. It should call into pi.lot-managed cron APIs/files so there is one source of truth.
+The skill should not independently run Telegram or pi sessions. It should manage cron definitions itself and enqueue prompt execution requests through pi.lot's generic prompt inbox (`/data/prompt_inbox`). pi.lot does not import skill code.
 
-Potential skill tools:
-
-- `cron_create(schedule, prompt, name=None, timezone=None)`
-- `cron_list()`
-- `cron_get(id)`
-- `cron_update(id, schedule=None, prompt=None, name=None, enabled=None, timezone=None)`
-- `cron_delete(id)`
-- `cron_run(id)`
+The skill should expose only one operational surface to the LLM: a small command-line helper in `scripts/cron_cli.py` with subcommands for create/list/show/update/delete/run/enable/disable/sync. This keeps context small and avoids many LLM tools.
 
 ## Minimal implementation approach
 
-1. Add persistent cronjob store.
-2. Add cron manager functions for CRUD and crontab regeneration.
-3. Add cron runner entrypoint that accepts a cronjob id and invokes existing prompt execution flow with a new session.
-4. Add standalone pi skill/tool definitions that call the cron manager.
-5. Ensure container has cron installed and running.
+1. Add persistent cronjob store inside the skill-managed `/data/cronjobs.json`.
+2. Add self-contained skill script for CRUD and crontab regeneration.
+3. Cron calls the skill script, which writes a prompt request into `/data/prompt_inbox`.
+4. pi.lot watches `/data/prompt_inbox` generically and invokes the existing prompt execution flow with a new session.
+5. Ensure container has cron installed/running and syncs crontab from the skill script on startup.
 6. Add logs for cron execution failures.
 
 ## Security and authorization

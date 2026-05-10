@@ -11,6 +11,7 @@ RUN apt-get update \
         openssh-client \
         openssh-server \
         ca-certificates \
+        cron \
         nodejs \
         npm \
     && npm install -g @earendil-works/pi-coding-agent@latest \
@@ -23,4 +24,6 @@ RUN pip install -r requirements.txt
 COPY pilot ./pilot
 COPY pilot/skills /root/.agents/skills
 
-CMD ["python", "-m", "pilot"]
+RUN mkdir -p /data
+
+CMD ["sh", "-c", "cron && python /root/.agents/skills/cronjobs/scripts/cron_cli.py sync || true; python -m pilot"]

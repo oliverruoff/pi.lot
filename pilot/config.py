@@ -16,6 +16,7 @@ class Config:
     pi_command: str
     pi_args: list[str]
     telegram_parse_mode: str
+    data_dir: str
 
 
 def _read_behavior() -> str:
@@ -47,4 +48,5 @@ def load_config() -> Config:
         pi_command=pi_command,
         pi_args=pi_args,
         telegram_parse_mode=os.getenv("TELEGRAM_PARSE_MODE", "MarkdownV2"),
+        data_dir=os.getenv("PILOT_DATA_DIR", "/data"),
     )
