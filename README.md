@@ -31,6 +31,14 @@ docker build -t pi-lot .
 docker run --env-file .env -v "$PWD/workspace:/workspace" pi-lot
 ```
 
+Or use the deployment script, which pulls/clones the repo, backs up `workspace`, rebuilds the image, replaces the old container, and starts the new one:
+
+```bash
+cp .env.example .env
+# edit .env
+./deploy.sh
+```
+
 The Docker image installs bash, cron, ssh client/server tooling, Node/npm, and the latest `@earendil-works/pi-coding-agent` package during build.
 
 ## Cronjobs
