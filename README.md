@@ -8,7 +8,7 @@ Version 1 of the AI assistant pi.lot, basically a Telegram bridge for the pi cod
 
 - Python Telegram bot with long polling
 - Starts and controls a `pi --mode rpc` subprocess over JSONL stdin/stdout
-- First Telegram user becomes the only authorized user and is persisted in `/data/auth.json`
+- First Telegram user becomes the only authorized user and is persisted in `/data/config.json` (legacy `/data/auth.json` is still read)
 - FIFO prompt queue while pi is busy
 - Thinking/final Telegram message updates
 - In-memory pi.lot commands: `/help`, `/new`, `/sessions`, `/session <id>`, `/behavior`, `/behavior_change <text>`
@@ -52,7 +52,7 @@ Required:
 Common optional values:
 
 - `PILOT_WORKDIR` (default `/workspace`)
-- `PILOT_DATA_DIR` (default `/data`; mount this for persisted auth and cronjobs)
+- `PILOT_DATA_DIR` (default `/data`; mount this for persisted config/auth and cronjobs)
 - `PILOT_BEHAVIOR_PROMPT` or `PILOT_BEHAVIOR_PROMPT_PATH`
 - `PI_ARGS` for non-secret pi CLI flags
 - pi provider secrets such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`

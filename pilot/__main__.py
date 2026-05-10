@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +12,7 @@ from telegram.constants import ParseMode
 from telegram.error import BadRequest, RetryAfter, TimedOut
 from telegram.ext import Application, ApplicationBuilder, ContextTypes, MessageHandler, filters
 
-from .config import Config, load_config
+from .config import Config, load_config, persist_config
 from .pi_rpc import PiRPC
 from .telegram_format import format_for_telegram
 
@@ -48,8 +48,8 @@ class WorkItem:
 class PilotApp:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.main_user_id: int | None = None
-        self.main_chat_id: int | None = None
+        self.main_user_id: int | None = cfg.main_user_id
+        self.main_chat_id: int | None = cfg.main_chat_id
         self.pi = PiRPC(cfg.pi_command, cfg.pi_args, cfg.workdir, self.on_pi_event)
         self.app: Application | None = None
         self.queue: asyncio.Queue[WorkItem] = asyncio.Queue()
@@ -146,6 +146,7 @@ class PilotApp:
             else:
                 self.behavior_prompt = arg
                 self.inject_behavior_next = True
+                self._save_config()
                 await context.bot.send_message(chat_id, "Behavior prompt changed. It will be applied to the next new session/first prompt.")
         elif cmd == "/stop":
             cleared = self._clear_queue()
@@ -417,15 +418,26 @@ class PilotApp:
             log.exception("failed to update prompt status")
 
     def _load_auth(self) -> None:
+        if self.main_user_id is not None and self.main_chat_id is not None:
+            return
         try:
             if self.auth_file.exists():
                 data = json.loads(self.auth_file.read_text(encoding="utf-8"))
                 self.main_user_id = int(data["user_id"])
                 self.main_chat_id = int(data["chat_id"])
+                self._save_config()
         except Exception:
             log.exception("failed to load auth file")
 
+    def _save_config(self) -> None:
+        try:
+            self.cfg = replace(self.cfg, behavior_prompt=self.behavior_prompt, main_user_id=self.main_user_id, main_chat_id=self.main_chat_id)
+            persist_config(self.cfg)
+        except Exception:
+            log.exception("failed to save config file")
+
     def _save_auth(self) -> None:
+        self._save_config()
         try:
             self.auth_file.parent.mkdir(parents=True, exist_ok=True)
             self.auth_file.write_text(json.dumps({"user_id": self.main_user_id, "chat_id": self.main_chat_id}) + "\n", encoding="utf-8")
