@@ -18,6 +18,7 @@ IMAGE_TAG="${IMAGE_TAG:-latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-pi-lot}"
 RESTART_POLICY="${RESTART_POLICY:-unless-stopped}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-30}"
+CONTAINER_TZ="${CONTAINER_TZ:-${TZ:-Europe/Zurich}}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -97,6 +98,9 @@ docker run -d \
   --name "$CONTAINER_NAME" \
   --restart "$RESTART_POLICY" \
   --env-file "$ENV_FILE" \
+  -e TZ="$CONTAINER_TZ" \
+  -v /etc/localtime:/etc/localtime:ro \
+  -v /etc/timezone:/etc/timezone:ro \
   -v "$WORKSPACE_DIR:/workspace" \
   $DOCKER_RUN_ARGS \
   "${IMAGE_NAME}:${IMAGE_TAG}"
