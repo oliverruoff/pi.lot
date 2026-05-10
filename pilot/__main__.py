@@ -23,6 +23,7 @@ HELP = """pi.lot commands:
 /session <id> - Switch to session
 /behavior - Show current behavior prompt
 /behavior_change <string> - Change behavior prompt
+/stop - Abort current pi run and clear queued prompts
 
 Unknown slash commands are forwarded to pi (for example /login, /model, /skill:name)."""
 
@@ -133,9 +134,30 @@ class PilotApp:
                 self.behavior_prompt = arg
                 self.inject_behavior_next = True
                 await context.bot.send_message(chat_id, "Behavior prompt changed. It will be applied to the next new session/first prompt.")
+        elif cmd == "/stop":
+            cleared = self._clear_queue()
+            await self.pi.abort()
+            self.current_text = "Stopped."
+            self.current_thinking = ""
+            self.current_status = ""
+            await self.update_reply("Stopped.", force=True)
+            suffix = f" Cleared {cleared} queued prompt(s)." if cleared else ""
+            await context.bot.send_message(chat_id, f"Stopped.{suffix}")
         else:
             return False
         return True
+
+    def _clear_queue(self) -> int:
+        cleared = 0
+        while True:
+            try:
+                self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            else:
+                self.queue.task_done()
+                cleared += 1
+        return cleared
 
     async def worker(self) -> None:
         while True:

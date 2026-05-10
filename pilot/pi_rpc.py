@@ -137,6 +137,11 @@ class PiRPC:
     async def extension_ui_response(self, data: dict[str, Any]) -> None:
         await self.send({"type": "extension_ui_response", **data}, wait_response=False)
 
+    async def abort(self) -> None:
+        await self.send({"type": "abort"})
+        if self._agent_done:
+            self._agent_done.set()
+
     async def _read_stdout(self) -> None:
         assert self.proc and self.proc.stdout
         while True:
