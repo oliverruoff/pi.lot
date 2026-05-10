@@ -50,13 +50,16 @@ Persisted format:
 
 User-facing input may be natural language. The LLM/skill should convert natural-language recurrence requests into explicit cron syntax before creating or editing a cronjob.
 
-Nice-to-have shortcuts:
+Supported shortcuts:
 
 - `@hourly`
 - `@daily`
 - `@weekly`
 - `@monthly`
-- `@reboot` only if explicitly supported and safe
+
+Unsupported:
+
+- `@reboot` is not supported because it may run before Telegram/pi are ready.
 
 Natural-language scheduling is expected for the user interface, but persisted cronjobs must store the resolved cron expression.
 
@@ -94,7 +97,7 @@ If implemented as a skill, slash commands are not required for version 1 of cron
 3. pi.lot loads the cronjob definition.
 4. pi.lot creates a new pi session.
 5. The cron-created session is registered in normal session management and appears in `/sessions`.
-6. The currently active Telegram session should not be switched unless this is simpler to implement; if switching is unavoidable, it is acceptable but should be documented.
+6. The currently active Telegram session remains unchanged. Cronjob sessions are inserted into normal session history and can be selected later by the user, but they do not become active automatically.
 7. pi.lot submits the cronjob prompt using the same internal path as a Telegram user prompt.
 8. pi.lot sends thinking/progress/final output to the authorized Telegram chat using the existing Telegram output mechanism.
 9. Cronjob output is always sent to Telegram.
@@ -185,13 +188,14 @@ Potential skill tools:
 - Cron-created sessions should appear in `/sessions`.
 - Cronjob output is always sent to Telegram.
 - Natural-language scheduling should be supported by having the LLM/skill convert user intent into explicit cron syntax before persistence.
+- Scheduled cronjob prompts should use the recommended/lower-effort execution path. Parallel execution in separate pi sessions is acceptable.
+- The active Telegram session must remain unchanged when a cronjob creates a session. Cronjob sessions are visible in `/sessions` but only become active if the user switches to them manually.
+- Editing supports partial field updates only.
+- No explicit limits are required for number of cronjobs, prompt length, or execution duration.
+- Cronjob history only needs `last_status` for now.
+- Cronjobs should be included in backup/export functionality later.
+- `@reboot` cronjobs are not supported.
 
 ## Remaining open points
 
-1. Should scheduled cronjob prompts share the same global prompt queue as Telegram messages, or run concurrently in separate pi sessions? Current preference: use whichever has lower implementation effort, with parallel execution acceptable.
-2. Should the active Telegram session remain unchanged when a cronjob creates a session, or may it switch if that is simpler?
-3. Should editing support partial field updates only, or also full replacement by name/id?
-4. Should there be limits on number of cronjobs, prompt length, and execution duration?
-5. Should cronjob history keep only `last_status`, or store a run log/history per execution?
-6. Should cronjobs be included in backup/export functionality later?
-7. Should `@reboot` jobs be supported, given they may run before Telegram/pi are ready?
+None for the current cronjobs specification.
