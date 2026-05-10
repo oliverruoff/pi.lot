@@ -21,5 +21,6 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 COPY pilot ./pilot
+COPY pilot/skills /root/.agents/skills
 
 CMD ["python", "-m", "pilot"]
