@@ -38,12 +38,39 @@ class PiRPC:
             stdin=PIPE,
             stdout=PIPE,
             stderr=PIPE,
+            # RPC events are one JSON object per line. agent_end/message_end can
+            # contain the full assistant message plus large tool outputs, easily
+            # exceeding asyncio's default 64 KiB StreamReader limit. If the limit
+            # is hit, readline() raises and the reader task dies, leaving the bot
+            # stuck on "Thinking…" forever even though pi finished the session.
+            limit=16 * 1024 * 1024,
         )
         self._reader_task = asyncio.create_task(self._read_stdout())
         self._stderr_task = asyncio.create_task(self._read_stderr())
+        self._reader_task.add_done_callback(self._log_task_failure)
+        self._stderr_task.add_done_callback(self._log_task_failure)
         log.info("started pi RPC: %s %s", self.command, " ".join(self.args))
 
+    def _log_task_failure(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            log.exception("pi RPC background task failed", exc_info=exc)
+            self._fail_pending(exc)
+            if self._agent_done:
+                self._agent_done.set()
+
+    def _fail_pending(self, exc: Exception) -> None:
+        for fut in list(self._responses.values()):
+            if not fut.done():
+                fut.set_exception(exc)
+        self._responses.clear()
+
     async def stop(self) -> None:
+        self._fail_pending(RuntimeError("pi RPC process stopped"))
+        if self._agent_done:
+            self._agent_done.set()
         if self.proc and self.proc.stdin and not self.proc.stdin.is_closing():
             self.proc.stdin.close()
             try:
@@ -61,8 +88,12 @@ class PiRPC:
             if task and not task.done():
                 task.cancel()
 
-    async def send(self, cmd: dict[str, Any], wait_response: bool = True) -> dict[str, Any] | None:
-        if not self.proc or not self.proc.stdin:
+    async def restart(self) -> None:
+        await self.stop()
+        await self.start()
+
+    async def send(self, cmd: dict[str, Any], wait_response: bool = True, timeout: float = 30.0) -> dict[str, Any] | None:
+        if not self.proc or not self.proc.stdin or self.proc.returncode is not None:
             raise RuntimeError("pi RPC process is not running")
         req_id = cmd.get("id") or str(uuid.uuid4())
         cmd = {**cmd, "id": req_id}
@@ -70,12 +101,19 @@ class PiRPC:
         if wait_response:
             fut = asyncio.get_running_loop().create_future()
             self._responses[req_id] = fut
-        line = json.dumps(cmd, ensure_ascii=False) + "\n"
-        self.proc.stdin.write(line.encode("utf-8"))
-        await self.proc.stdin.drain()
-        if fut:
-            return await fut
-        return None
+        try:
+            line = json.dumps(cmd, ensure_ascii=False) + "\n"
+            self.proc.stdin.write(line.encode("utf-8"))
+            await asyncio.wait_for(self.proc.stdin.drain(), timeout=timeout)
+            if fut:
+                return await asyncio.wait_for(fut, timeout=timeout)
+            return None
+        except Exception:
+            if fut and self._responses.get(req_id) is fut:
+                self._responses.pop(req_id, None)
+                if not fut.done():
+                    fut.cancel()
+            raise
 
     async def prompt_and_wait(self, message: str, streaming_behavior: str | None = None) -> None:
         self._agent_done = asyncio.Event()
@@ -137,16 +175,21 @@ class PiRPC:
     async def extension_ui_response(self, data: dict[str, Any]) -> None:
         await self.send({"type": "extension_ui_response", **data}, wait_response=False)
 
-    async def abort(self) -> None:
-        await self.send({"type": "abort"})
+    async def abort(self, timeout: float = 2.0) -> None:
+        # Unblock pi.lot immediately.  Abort is a rescue path and must never wait
+        # forever for a wedged pi process to acknowledge the command.
         if self._agent_done:
             self._agent_done.set()
+        await self.send({"type": "abort"}, wait_response=False, timeout=timeout)
 
     async def _read_stdout(self) -> None:
         assert self.proc and self.proc.stdout
         while True:
             raw = await self.proc.stdout.readline()
             if not raw:
+                self._fail_pending(RuntimeError("pi RPC stdout closed"))
+                if self._agent_done:
+                    self._agent_done.set()
                 break
             line = raw.decode("utf-8", errors="replace").rstrip("\n")
             if line.endswith("\r"):

@@ -70,7 +70,9 @@ class PilotApp:
         self._load_auth()
         await self.pi.start()
         await self._remember_current_session()
-        self.app = ApplicationBuilder().token(self.cfg.telegram_bot_token).build()
+        # Process Telegram updates concurrently so one stuck command handler cannot
+        # make /stop (or any later message) unreachable.
+        self.app = ApplicationBuilder().token(self.cfg.telegram_bot_token).concurrent_updates(True).build()
         self.app.add_handler(MessageHandler(filters.ALL, self.on_update))
         asyncio.create_task(self.worker())
         asyncio.create_task(self.prompt_inbox_watcher())
@@ -99,11 +101,13 @@ class PilotApp:
             await context.bot.send_message(chat_id, "Only text messages are supported in version 1.")
             return
 
-        if self.pending_ui:
-            await self._answer_pending_ui(text, context)
+        # Rescue commands must preempt extension UI prompts. Otherwise /stop can be
+        # swallowed as a UI answer while pi is waiting or wedged.
+        if text.startswith("/") and await self._handle_pilot_command(text, context):
             return
 
-        if text.startswith("/") and await self._handle_pilot_command(text, context):
+        if self.pending_ui:
+            await self._answer_pending_ui(text, context)
             return
 
         await self.queue.put(WorkItem(text))
@@ -150,13 +154,25 @@ class PilotApp:
                 await context.bot.send_message(chat_id, "Behavior prompt changed. It will be applied to the next new session/first prompt.")
         elif cmd == "/stop":
             cleared = self._clear_queue()
-            await self.pi.abort()
+            restarted = False
+            self.pending_ui = None
+            try:
+                await self.pi.abort(timeout=2.0)
+                # Verify the RPC loop is responsive. If it cannot answer quickly,
+                # kill/restart pi rather than leaving the bot wedged.
+                await asyncio.wait_for(self.pi.get_state(), timeout=2.0)
+            except Exception:
+                log.exception("pi abort/responsiveness check failed; restarting pi RPC")
+                await self.pi.restart()
+                await self._remember_current_session()
+                restarted = True
             self.current_text = "Stopped."
             self.current_thinking = ""
             self.current_status = ""
             await self.update_reply("Stopped.", force=True)
             suffix = f" Cleared {cleared} queued prompt(s)." if cleared else ""
-            await context.bot.send_message(chat_id, f"Stopped.{suffix}")
+            restart_note = " pi was unresponsive and was restarted." if restarted else ""
+            await context.bot.send_message(chat_id, f"Stopped.{suffix}{restart_note}")
         else:
             return False
         return True
@@ -506,6 +522,9 @@ class PilotApp:
 def main() -> None:
     cfg = load_config()
     logging.basicConfig(level=getattr(logging, cfg.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # httpx INFO logs include full Telegram Bot API URLs, which contain the bot
+    # token. Keep them out of container logs.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     asyncio.run(PilotApp(cfg).run())
 
 
