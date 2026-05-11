@@ -10,7 +10,11 @@ Use this skill to search and read Gmail through IMAP. It is standalone and does 
 
 ## Configuration
 
-Credentials are read from environment variables, or from an optional `.env` file in this skill directory or current working directory:
+**Important:** The skill reads credentials from **environment variables first**. If a variable is not set, it falls back to an optional `.env` file in the skill directory or current working directory.
+
+### Environment Variables (Primary)
+
+Set these in your environment or container configuration:
 
 ```env
 GMAIL_EMAIL=your.address@gmail.com
@@ -20,6 +24,19 @@ GMAIL_IMAP_PORT=993
 ```
 
 Only `GMAIL_EMAIL` and `GMAIL_APP_PASSWORD` are required. Do not print or log the app password.
+
+**Priority:** Environment variables take precedence over `.env` file values. If `GMAIL_EMAIL` is already set in your environment, the `.env` file will be ignored for that variable.
+
+### .env File (Optional Fallback)
+
+If environment variables are not set, create a `.env` file in the skill directory (`pilot/skills/gmail-access/.env`) or current working directory:
+
+```env
+GMAIL_EMAIL=your.address@gmail.com
+GMAIL_APP_PASSWORD=your-gmail-app-password
+GMAIL_IMAP_HOST=imap.gmail.com
+GMAIL_IMAP_PORT=993
+```
 
 ## CLI
 
