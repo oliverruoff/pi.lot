@@ -17,6 +17,7 @@ _BULLET_RE = re.compile(r"^(\s*)[-*+]\s+(.+)$")
 _ORDERED_RE = re.compile(r"^(\s*)(\d+)[.)]\s+(.+)$")
 _QUOTE_RE = re.compile(r"^\s*>\s?(.*)$")
 _RULE_RE = re.compile(r"^\s{0,3}([-*_])(?:\s*\1){2,}\s*$")
+_TABLE_RE = re.compile(r"^\s*\|.+?\|.*$")
 
 
 def escape_markdown_v2(text: str) -> str:
@@ -80,20 +81,39 @@ def _inline_markdown_to_markdown_v2(text: str) -> str:
     return text
 
 
+def _flush_table(table_lines: list[str], lines: list[str]) -> None:
+    if not table_lines:
+        return
+    lines.append("```")
+    for tl in table_lines:
+        lines.append(_escape_code_markdown_v2(tl))
+    lines.append("```")
+    table_lines.clear()
+
+
 def markdown_to_telegram_markdown_v2(text: str) -> str:
     """Best-effort conversion from common Markdown to Telegram MarkdownV2."""
     lines: list[str] = []
     in_fence = False
+    table_lines: list[str] = []
 
     for raw_line in text.splitlines():
         if _FENCE_RE.match(raw_line):
+            _flush_table(table_lines, lines)
             lines.append("```")
             in_fence = not in_fence
             continue
 
         if in_fence:
+            _flush_table(table_lines, lines)
             lines.append(_escape_code_markdown_v2(raw_line))
             continue
+
+        if _TABLE_RE.match(raw_line):
+            table_lines.append(raw_line)
+            continue
+
+        _flush_table(table_lines, lines)
 
         if not raw_line:
             lines.append("")
@@ -128,6 +148,7 @@ def markdown_to_telegram_markdown_v2(text: str) -> str:
 
         lines.append(_inline_markdown_to_markdown_v2(raw_line))
 
+    _flush_table(table_lines, lines)
     if in_fence:
         lines.append("```")
     return "\n".join(lines)
