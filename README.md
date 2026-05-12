@@ -51,6 +51,16 @@ cd /root/.agents/skills/cronjobs && python scripts/cron_cli.py list
 
 Cronjobs are stored in `/workspace/data/cronjobs.json`; Linux crontab is regenerated from that file on startup and after changes. The cronjob implementation is self-contained in `pilot/skills/cronjobs/`; pi.lot only watches the generic `/workspace/data/prompt_inbox` for prompts to execute.
 
+## Skills
+
+pi.lot includes self-contained skills in `pilot/skills/`. Each skill is standalone and can be invoked by pi when relevant.
+
+- **youtube-summarizer**: Fetches YouTube transcripts for agent-side summarization.
+- **memory**: Persists and retrieves assistant memories in markdown files under `/workspace/memory`.
+- **gmail-access**: Searches and reads Gmail via IMAP using an app password.
+- **cronjobs**: Scheduled natural-language prompts backed by Linux cron and `/workspace/data/cronjobs.json`.
+- **brave-search**: Web and news search via the Brave Search API.
+
 ## Environment
 
 Required:
@@ -65,3 +75,8 @@ Common optional values:
 - `PI_ARGS` for non-secret pi CLI flags
 - pi provider secrets such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`
 - `LOG_LEVEL`
+
+Skill-specific optional values:
+
+- `GMAIL_EMAIL`, `GMAIL_APP_PASSWORD`, `GMAIL_IMAP_HOST`, `GMAIL_IMAP_PORT`
+- `BRAVE_SEARCH_API_KEY`
