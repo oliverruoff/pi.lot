@@ -60,6 +60,7 @@ pi.lot includes self-contained skills in `pilot/skills/`. Each skill is standalo
 - **gmail-access**: Searches and reads Gmail via IMAP using an app password.
 - **cronjobs**: Scheduled natural-language prompts backed by Linux cron and `/workspace/data/cronjobs.json`.
 - **brave-search**: Web and news search via the Brave Search API.
+- **home-assistant**: Read and control Home Assistant entities, call services, and manage automations via the Home Assistant REST API.
 
 ## Environment
 
@@ -80,3 +81,4 @@ Skill-specific optional values:
 
 - `GMAIL_EMAIL`, `GMAIL_APP_PASSWORD`, `GMAIL_IMAP_HOST`, `GMAIL_IMAP_PORT`
 - `BRAVE_SEARCH_API_KEY`
+- `HOME_ASSISTANT_URL`, `HOME_ASSISTANT_TOKEN`
