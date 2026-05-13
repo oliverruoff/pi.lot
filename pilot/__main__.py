@@ -213,7 +213,7 @@ class PilotApp:
                 await self.pi.prompt_and_wait(prompt, streaming_behavior="followUp")
                 await self._remember_current_session(make_active=not bool(item.cronjob_id))
                 final = self.current_text.strip() or self.current_status.strip() or "No assistant output was returned."
-                await self.update_reply(final, force=True)
+                await self.send_final_reply(final)
                 if item.cronjob_id:
                     self._mark_prompt_status(item.cronjob_id, "success")
                     if previous_active and previous_active in self.sessions:
@@ -344,6 +344,24 @@ class PilotApp:
         if self.current_status and self.current_status.strip() != body.strip():
             body += "\n\n" + self.current_status
         return body
+
+    async def send_final_reply(self, text: str) -> None:
+        if not self.current_reply or not self.app:
+            return
+        markdown = self.cfg.telegram_parse_mode.lower() == "markdownv2"
+        parts = format_for_telegram(text, markdown_v2=markdown)
+        parse_mode = ParseMode.MARKDOWN_V2 if markdown else None
+        bot = self.app.bot
+        for mid in [self.current_reply.main_message_id, *self.current_reply.extra_message_ids]:
+            if mid is None:
+                continue
+            try:
+                await bot.delete_message(self.current_reply.chat_id, mid)
+            except Exception:
+                pass
+        self.current_reply.extra_message_ids.clear()
+        for part in parts:
+            await bot.send_message(self.current_reply.chat_id, part or " ", parse_mode=parse_mode)
 
     async def update_reply(self, text: str, force: bool = False) -> None:
         if not self.current_reply or not self.app:
