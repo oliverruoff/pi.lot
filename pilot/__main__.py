@@ -9,7 +9,7 @@ from typing import Any
 
 from telegram import Update
 from telegram.constants import ParseMode
-from telegram.error import BadRequest, RetryAfter, TimedOut
+from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 from telegram.ext import Application, ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 from .config import Config, load_config, persist_config
@@ -378,7 +378,7 @@ class PilotApp:
                 self.current_reply.extra_message_ids.append(m.message_id)
         except RetryAfter as e:
             await asyncio.sleep(float(e.retry_after))
-        except (BadRequest, TimedOut) as e:
+        except (BadRequest, NetworkError, TimedOut) as e:
             log.warning("telegram update failed: %s", e)
 
     async def prompt_inbox_watcher(self) -> None:

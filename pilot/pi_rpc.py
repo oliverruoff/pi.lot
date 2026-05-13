@@ -123,7 +123,7 @@ class PiRPC:
         cmd: dict[str, Any] = {"type": "prompt", "message": message}
         if streaming_behavior:
             cmd["streamingBehavior"] = streaming_behavior
-        resp = await self.send(cmd)
+        resp = await self.send(cmd, timeout=120.0)
         if resp and not resp.get("success", False):
             self._agent_done = None
             raise RuntimeError(resp.get("error", "pi prompt failed"))
@@ -219,7 +219,10 @@ class PiRPC:
                     self._agent_done.set()
             if typ == "agent_end" and self._agent_done:
                 self._agent_done.set()
-            await self.on_event(msg)
+            try:
+                await self.on_event(msg)
+            except Exception:
+                log.exception("pi event handler failed")
 
     async def _read_stderr(self) -> None:
         assert self.proc and self.proc.stderr
