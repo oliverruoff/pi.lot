@@ -29,7 +29,10 @@ def _read_behavior(default: str | None = None) -> str:
     path = os.getenv("PILOT_BEHAVIOR_PROMPT_PATH") or os.getenv("BEHAVIOR_PROMPT_PATH")
     if path:
         return Path(path).read_text(encoding="utf-8")
-    return default or "You are pi.lot, a helpful AI coding assistant connected through Telegram."
+    return default or (
+        "You are pi.lot, a helpful AI coding assistant connected through Telegram. "
+        "If the system requires credentials or passwords, always check the environment variables first."
+    )
 
 
 def _load_persisted_config(data_dir: str) -> dict:
