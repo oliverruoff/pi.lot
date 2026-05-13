@@ -66,8 +66,39 @@ class PilotApp:
         self.auth_file = Path(cfg.data_dir) / "auth.json"
         self.prompt_inbox_dir = Path(cfg.data_dir) / "prompt_inbox"
 
+    def _apply_kimi_coding_ua_fix(self) -> None:
+        """Work around kimi-coding false 429 'engine overloaded' by setting a neutral User-Agent.
+        Mirrors gsd-build/gsd-2#5318 until the fix ships in @earendil-works/pi-coding-agent.
+        """
+        agent_dir = Path.home() / ".pi" / "agent"
+        models_path = agent_dir / "models.json"
+        config: dict[str, Any] = {}
+        if models_path.exists():
+            try:
+                config = json.loads(models_path.read_text(encoding="utf-8"))
+            except Exception:
+                log.warning("failed to parse existing models.json; skipping kimi-coding UA fix")
+                return
+        else:
+            agent_dir.mkdir(parents=True, exist_ok=True)
+
+        providers = config.setdefault("providers", {})
+        if "kimi-coding" in providers:
+            return  # User already has custom kimi-coding config
+
+        providers["kimi-coding"] = {
+            "baseUrl": "https://api.kimi.com/coding",
+            "headers": {"User-Agent": "gsd-pi"},
+        }
+
+        tmp = models_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(models_path)
+        log.info("applied kimi-coding User-Agent workaround to %s", models_path)
+
     async def run(self) -> None:
         self._load_auth()
+        self._apply_kimi_coding_ua_fix()
         await self.pi.start()
         await self._remember_current_session()
         # Process Telegram updates concurrently so one stuck command handler cannot
