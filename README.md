@@ -141,6 +141,17 @@ Bundled skills are copied into `/root/.agents/skills` in the Docker image. Each 
 - **brave-search** — web and news search via the Brave Search API.
 - **home-assistant** — read/control Home Assistant entities, call services, and manage automations through the REST API.
 
+### Skill environment variables
+
+| Skill | Required environment variables | Optional environment variables |
+|-------|--------------------------------|--------------------------------|
+| `youtube-summarizer` | None | None |
+| `memory` | None | None |
+| `gmail-access` | `GMAIL_EMAIL`, `GMAIL_APP_PASSWORD` | `GMAIL_IMAP_HOST` (default `imap.gmail.com`), `GMAIL_IMAP_PORT` (default `993`) |
+| `cronjobs` | None | None |
+| `brave-search` | `BRAVE_SEARCH_API_KEY` | None |
+| `home-assistant` | `HOME_ASSISTANT_TOKEN` | `HOME_ASSISTANT_URL` (default `http://homeassistant.local:8123`) |
+
 ## Cronjobs
 
 The cronjobs skill lets you ask pi naturally to create, list, edit, delete, enable/disable, or run scheduled prompts, for example:
@@ -202,13 +213,10 @@ OPENAI_API_KEY=sk-...
 PI_ARGS=--model anthropic/claude-sonnet-4-20250514
 ```
 
-Skill-specific optional values:
+Additional integration-specific values:
 
 | Variable | Used by |
 |----------|---------|
-| `GMAIL_EMAIL`, `GMAIL_APP_PASSWORD`, `GMAIL_IMAP_HOST`, `GMAIL_IMAP_PORT` | gmail-access |
-| `BRAVE_SEARCH_API_KEY` | brave-search |
-| `HOME_ASSISTANT_URL`, `HOME_ASSISTANT_TOKEN` | home-assistant |
 | `GITHUB_PAT` | pi/GitHub workflows |
 
 ## Repository layout
