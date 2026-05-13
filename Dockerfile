@@ -19,6 +19,17 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+RUN mkdir -p /root/.pi/agent \
+    && printf '%s\n' \
+        '{' \
+        '  "providers": {' \
+        '    "kimi-coding": {' \
+        '      "headers": { "User-Agent": "gsd-pi" }' \
+        '    }' \
+        '  }' \
+        '}' \
+        > /root/.pi/agent/models.json
+
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install -r requirements.txt

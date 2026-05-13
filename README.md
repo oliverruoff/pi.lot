@@ -39,7 +39,7 @@ cp .env.example .env
 ./deploy.sh
 ```
 
-The Docker image installs bash, cron, ssh client/server tooling, Node/npm, and the latest `@earendil-works/pi-coding-agent` package during build.
+The Docker image installs bash, cron, ssh client/server tooling, Node/npm, and the latest `@earendil-works/pi-coding-agent` package during build. It also includes a small pi `models.json` provider-header override for `kimi-coding` to avoid Kimi's misleading 429 "engine overloaded" response to the default Anthropic SDK User-Agent.
 
 ## Cronjobs
 
