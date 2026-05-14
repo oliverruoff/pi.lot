@@ -8,10 +8,10 @@ compatibility: Self-contained skill for pi.lot containers. Requires Python 3 and
 
 Use this skill for scheduled pi.lot prompts.
 
-Cronjobs are managed through one CLI interface:
+Cronjobs are managed through one CLI interface. From this skill directory (the directory containing `SKILL.md`):
 
 ```bash
-cd /root/.agents/skills/cronjobs && python scripts/cron_cli.py <command> ...
+python scripts/cron_cli.py <command> ...
 ```
 
 ## Important scheduling rule
@@ -39,46 +39,46 @@ Examples:
 Create:
 
 ```bash
-cd /root/.agents/skills/cronjobs && python scripts/cron_cli.py create --schedule "0 8 * * 1-5" --name "weekday report" --prompt "Summarize my todos and priorities for today."
+python scripts/cron_cli.py create --schedule "0 8 * * 1-5" --name "weekday report" --prompt "Summarize my todos and priorities for today."
 ```
 
 List:
 
 ```bash
-cd /root/.agents/skills/cronjobs && python scripts/cron_cli.py list
+python scripts/cron_cli.py list
 ```
 
 Show:
 
 ```bash
-cd /root/.agents/skills/cronjobs && python scripts/cron_cli.py show <id>
+python scripts/cron_cli.py show <id>
 ```
 
 Partial update only; pass only fields that should change:
 
 ```bash
-cd /root/.agents/skills/cronjobs && python scripts/cron_cli.py update <id> --schedule "0 18 * * *"
-cd /root/.agents/skills/cronjobs && python scripts/cron_cli.py update <id> --prompt "New prompt text"
-cd /root/.agents/skills/cronjobs && python scripts/cron_cli.py update <id> --name "new name"
+python scripts/cron_cli.py update <id> --schedule "0 18 * * *"
+python scripts/cron_cli.py update <id> --prompt "New prompt text"
+python scripts/cron_cli.py update <id> --name "new name"
 ```
 
 Enable/disable:
 
 ```bash
-cd /root/.agents/skills/cronjobs && python scripts/cron_cli.py enable <id>
-cd /root/.agents/skills/cronjobs && python scripts/cron_cli.py disable <id>
+python scripts/cron_cli.py enable <id>
+python scripts/cron_cli.py disable <id>
 ```
 
 Delete:
 
 ```bash
-cd /root/.agents/skills/cronjobs && python scripts/cron_cli.py delete <id>
+python scripts/cron_cli.py delete <id>
 ```
 
 Run now:
 
 ```bash
-cd /root/.agents/skills/cronjobs && python scripts/cron_cli.py run <id>
+python scripts/cron_cli.py run <id>
 ```
 
 ## Behavior

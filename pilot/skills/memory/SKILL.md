@@ -128,10 +128,12 @@ end_date:
 
 ## Minimal implementation contract
 
+From this skill directory (the directory containing `SKILL.md`):
+
 ```text
-scripts/memory_tool.py read-memory --target memory.md
-scripts/memory_tool.py read-memory --start-date 2026-05-03 --end-date 2026-05-09
-scripts/memory_tool.py save-memory --memory "The user prefers concise answers."
+python scripts/memory_tool.py read-memory --target memory.md
+python scripts/memory_tool.py read-memory --start-date 2026-05-03 --end-date 2026-05-09
+python scripts/memory_tool.py save-memory --memory "The user prefers concise answers."
 ```
 
 The implementation preserves the logical two-tool surface: `read-memory` and `save-memory`.

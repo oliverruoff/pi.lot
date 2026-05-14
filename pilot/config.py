@@ -8,6 +8,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
+WORKSPACE_SKILLS_DIR = "/workspace/skills"
+
+
 @dataclass(frozen=True)
 class Config:
     telegram_bot_token: str
@@ -74,9 +77,9 @@ def load_config() -> Config:
     pi_command = os.getenv("PI_COMMAND") or persisted.get("pi_command") or "pi"
     extra_args = os.getenv("PI_ARGS")
     if extra_args is not None:
-        pi_args = ["--mode", "rpc"] + [a for a in extra_args.split(" ") if a]
+        pi_args = ["--mode", "rpc", "--skill", WORKSPACE_SKILLS_DIR] + [a for a in extra_args.split(" ") if a]
     else:
-        pi_args = persisted.get("pi_args") if isinstance(persisted.get("pi_args"), list) else ["--mode", "rpc", "--skill", "/workspace/skills"]
+        pi_args = persisted.get("pi_args") if isinstance(persisted.get("pi_args"), list) else ["--mode", "rpc", "--skill", WORKSPACE_SKILLS_DIR]
 
     cfg = Config(
         telegram_bot_token=str(token),

@@ -24,7 +24,7 @@ BRAVE_SEARCH_API_KEY=YOUR_BRAVE_API_KEY
 
 ### .env File (Optional Fallback)
 
-If the environment variable is not set, create a `.env` file in the skill directory (`pilot/skills/brave-search/.env`) or current working directory:
+If the environment variable is not set, create a `.env` file in this skill directory (`.env`, next to `SKILL.md`) or current working directory:
 
 ```env
 BRAVE_SEARCH_API_KEY=YOUR_BRAVE_API_KEY
@@ -34,13 +34,7 @@ Get a free API key at: https://api.search.brave.com/app/
 
 ## First-time setup
 
-This skill is standalone and has no dependency on the host project. Before first use, install its local requirements if they are not already available:
-
-```bash
-python -m pip install -r pilot/skills/brave-search/requirements.txt
-```
-
-If running from inside this skill directory:
+This skill is standalone and has no dependency on the host project. From this skill directory (the directory containing `SKILL.md`), install local requirements if they are not already available:
 
 ```bash
 python -m pip install -r requirements.txt
@@ -48,13 +42,7 @@ python -m pip install -r requirements.txt
 
 ## CLI
 
-Run from the repository root:
-
-```bash
-python pilot/skills/brave-search/scripts/brave_search.py <command> --query "..."
-```
-
-Or from this skill directory:
+From this skill directory (the directory containing `SKILL.md`):
 
 ```bash
 python scripts/brave_search.py <command> --query "..."
@@ -65,7 +53,7 @@ All commands print JSON.
 ## Web search
 
 ```bash
-python pilot/skills/brave-search/scripts/brave_search.py search --query "Python async best practices" --count 10 --language en
+python scripts/brave_search.py search --query "Python async best practices" --count 10 --language en
 ```
 
 Options:
@@ -82,7 +70,7 @@ Returns a JSON array of results with `title`, `url`, `description`, `age`, and `
 ## News search
 
 ```bash
-python pilot/skills/brave-search/scripts/brave_search.py news --query "AI regulation" --count 5 --freshness pw
+python scripts/brave_search.py news --query "AI regulation" --count 5 --freshness pw
 ```
 
 Options are the same as web search. Returns a JSON array of news results with `title`, `url`, `description`, and `age`.

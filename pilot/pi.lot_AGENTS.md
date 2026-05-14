@@ -1,2 +1,3 @@
 - If secrets required, check environment variables
 - When creating skills, ALWAYS create them under /workspace/skills
+- When a skill was created, trigger /reload to discover it

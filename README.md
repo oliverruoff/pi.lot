@@ -137,7 +137,7 @@ Mount `/workspace` to persist sessions and pi.lot state across container rebuild
 
 ## Skills
 
-Bundled skills are copied into `/root/.agents/skills` in the Docker image. Each skill is self-contained and is invoked by pi when relevant.
+Bundled skills are copied into `/root/.pi/agent/skills` in the Docker image. User-created persistent skills should live under `/workspace/skills`; pi.lot always starts pi with `--skill /workspace/skills` so this non-standard directory is included in skill discovery. Each skill is self-contained and is invoked by pi when relevant.
 
 - **youtube-summarizer** — fetch YouTube transcripts for agent-side summarization.
 - **memory** — persist and retrieve assistant memories in markdown files under `/workspace/memory`.
@@ -194,7 +194,7 @@ pi.lot watches that inbox, starts a fresh pi session for the scheduled prompt, s
 Manual inspection inside the container:
 
 ```bash
-cd /root/.agents/skills/cronjobs
+cd /root/.pi/agent/skills/cronjobs
 python scripts/cron_cli.py list
 python scripts/cron_cli.py sync
 ```
@@ -216,7 +216,7 @@ Common optional values:
 | `PILOT_BEHAVIOR_PROMPT` | built-in default | Behavior prompt injected into new sessions |
 | `PILOT_BEHAVIOR_PROMPT_PATH` | unset | Read behavior prompt from a file |
 | `PI_COMMAND` | `pi` | pi executable |
-| `PI_ARGS` | `--mode rpc` | Extra pi CLI args; `--mode rpc` is prepended when set |
+| `PI_ARGS` | unset | Extra pi CLI args; pi.lot always adds `--mode rpc --skill /workspace/skills` |
 | `TELEGRAM_PARSE_MODE` | `MarkdownV2` | Telegram parse mode; set differently to disable MarkdownV2 formatting |
 | `LOG_LEVEL` | `INFO` | Python log level |
 

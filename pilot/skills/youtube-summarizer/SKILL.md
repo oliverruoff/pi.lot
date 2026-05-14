@@ -10,13 +10,7 @@ Use this skill when the user asks to summarize, recap, explain, or extract key p
 
 ## First-time setup
 
-This skill is standalone and has no dependency on the host project. Before first use, install its local requirements if they are not already available:
-
-```bash
-python -m pip install -r pilot/skills/youtube-summarizer/requirements.txt
-```
-
-If running from inside this skill directory:
+This skill is standalone and has no dependency on the host project. From this skill directory (the directory containing `SKILL.md`), install local requirements if they are not already available:
 
 ```bash
 python -m pip install -r requirements.txt
@@ -26,13 +20,10 @@ python -m pip install -r requirements.txt
 
 Run the transcript helper script with a YouTube URL or 11-character video ID:
 
-```bash
-python pilot/skills/youtube-summarizer/scripts/youtube_summarizer.py "https://www.youtube.com/watch?v=VIDEO_ID" --detail standard --languages en
-```
-
-From inside this skill directory:
+From this skill directory (the directory containing `SKILL.md`):
 
 ```bash
+python scripts/youtube_summarizer.py "https://www.youtube.com/watch?v=VIDEO_ID" --detail standard --languages en
 python scripts/youtube_summarizer.py "VIDEO_ID" --detail brief --languages en de
 ```
 

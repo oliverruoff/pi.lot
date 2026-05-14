@@ -41,13 +41,7 @@ If not set, the default is `http://homeassistant.local:8123`.
 
 ## First-time setup
 
-Install local requirements if they are not already available:
-
-```bash
-python -m pip install -r pilot/skills/home-assistant/requirements.txt
-```
-
-Or from inside this skill directory:
+From this skill directory (the directory containing `SKILL.md`), install local requirements if they are not already available:
 
 ```bash
 python -m pip install -r requirements.txt
@@ -55,15 +49,7 @@ python -m pip install -r requirements.txt
 
 ## CLI
 
-All commands print JSON.
-
-Run from the repository root:
-
-```bash
-python pilot/skills/home-assistant/scripts/home_assistant.py <command> [options]
-```
-
-Or from this skill directory:
+All commands print JSON. From this skill directory (the directory containing `SKILL.md`):
 
 ```bash
 python scripts/home_assistant.py <command> [options]

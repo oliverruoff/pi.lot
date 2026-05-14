@@ -29,7 +29,7 @@ Only `GMAIL_EMAIL` and `GMAIL_APP_PASSWORD` are required. Do not print or log th
 
 ### .env File (Optional Fallback)
 
-If environment variables are not set, create a `.env` file in the skill directory (`pilot/skills/gmail-access/.env`) or current working directory:
+If environment variables are not set, create a `.env` file in this skill directory (`.env`, next to `SKILL.md`) or current working directory:
 
 ```env
 GMAIL_EMAIL=your.address@gmail.com
@@ -40,13 +40,7 @@ GMAIL_IMAP_PORT=993
 
 ## CLI
 
-Run from the repository root:
-
-```bash
-python pilot/skills/gmail-access/scripts/gmail_imap.py <command> ...
-```
-
-Or from this skill directory:
+From this skill directory (the directory containing `SKILL.md`):
 
 ```bash
 python scripts/gmail_imap.py <command> ...
@@ -57,7 +51,7 @@ All commands print JSON.
 ## Search mail
 
 ```bash
-python pilot/skills/gmail-access/scripts/gmail_imap.py search --from alice@example.com --subject invoice --since 2026-05-01 --limit 10
+python scripts/gmail_imap.py search --from alice@example.com --subject invoice --since 2026-05-01 --limit 10
 ```
 
 Search options:
@@ -79,7 +73,7 @@ Search returns matching message UIDs plus subject, from, to, date, message id, a
 Use a UID returned by search:
 
 ```bash
-python pilot/skills/gmail-access/scripts/gmail_imap.py read 12345
+python scripts/gmail_imap.py read 12345
 ```
 
 Read returns subject, from, to, date, message id, plain text body, HTML body if present, and attachment metadata.
@@ -87,7 +81,7 @@ Read returns subject, from, to, date, message id, plain text body, HTML body if 
 ## Download attachments
 
 ```bash
-python pilot/skills/gmail-access/scripts/gmail_imap.py download-attachments 12345 --output-dir /tmp/gmail-attachments
+python scripts/gmail_imap.py download-attachments 12345 --output-dir /tmp/gmail-attachments
 ```
 
 This saves all attachments for the message UID and returns saved file paths.

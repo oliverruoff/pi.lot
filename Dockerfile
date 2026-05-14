@@ -19,7 +19,7 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /root/.pi/agent /workspace/skills
+RUN mkdir -p /root/.pi/agent/skills /workspace/skills
 
 # add specific model configs (e.g. for improving kimi-code usage)
 COPY pilot/models.json /root/.pi/agent/models.json
@@ -30,8 +30,9 @@ COPY pilot/pi.lot_AGENTS.md /root/.pi/agent/AGENTS.md
 # load pi.lot built-in skills
 COPY pilot/skills /root/.pi/agent/skills/
 
-# whenever new skills are created under /root/.pi/agent/skills they will be 
-# automatically symlinked to /workspace/skills for later persistence
+# Expose persistent workspace skills under the global pi skill tree too.
+# pi.lot also passes `--skill /workspace/skills` at runtime because
+# /workspace/skills is not a documented auto-discovery directory.
 RUN ln -s /workspace/skills /root/.pi/agent/skills
 
 # load pi.lot built-in extensions 
