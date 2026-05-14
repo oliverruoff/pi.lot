@@ -77,7 +77,7 @@ def load_config() -> Config:
     if extra_args is not None:
         pi_args = ["--mode", "rpc"] + [a for a in extra_args.split(" ") if a]
     else:
-        pi_args = persisted.get("pi_args") if isinstance(persisted.get("pi_args"), list) else ["--mode", "rpc"]
+        pi_args = persisted.get("pi_args") if isinstance(persisted.get("pi_args"), list) else ["--mode", "rpc", "--skill", "/workspace/skills"]
 
     cfg = Config(
         telegram_bot_token=str(token),
