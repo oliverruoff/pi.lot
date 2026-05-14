@@ -19,17 +19,28 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /root/.pi/agent
+RUN mkdir -p /root/.pi/agent /workspace/skills
 
 # add specific model configs (e.g. for improving kimi-code usage)
-COPY models.json /root/.pi/agent/models.json
+COPY pilot/models.json /root/.pi/agent/models.json
+
+# add pi.lot agents.md instructions
+COPY pilot/pi.lot_AGENTS.md /root/.pi/agent/AGENTS.md
+
+# load pi.lot built-in skills
+COPY pilot/skills /root/.pi/agent/skills/
+
+# whenever new skills are created under /root/.pi/agent/skills they will be 
+# automatically symlinked to /workspace/skills for later persistence
+RUN ln -s /workspace/skills /root/.pi/agent/skills
+
+# load pi.lot built-in extensions 
+COPY pilot/pi_extensions/ /root/.pi/agent/extensions/
 
 WORKDIR /app
-COPY requirements.txt ./
+COPY pilot/requirements.txt ./
 RUN pip install -r requirements.txt
 COPY pilot ./pilot
-COPY pilot/skills /root/.pi/agent/skills/
-COPY pi_extensions/ /root/.pi/agent/extensions/
 
 RUN mkdir -p /workspace/data
 

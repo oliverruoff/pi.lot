@@ -1,0 +1,2 @@
+- If secrets required, check environment variables
+- When creating skills, ALWAYS create them under /workspace/skills

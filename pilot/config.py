@@ -30,8 +30,7 @@ def _read_behavior(default: str | None = None) -> str:
     if path:
         return Path(path).read_text(encoding="utf-8")
     return default or (
-        "You are pi.lot, a helpful AI coding assistant connected through Telegram. "
-        "If the system requires credentials or passwords, always check the environment variables first."
+        "You are pi.lot, a helpful AI coding assistant connected through Telegram."
     )
 
 
