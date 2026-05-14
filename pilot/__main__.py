@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -65,9 +66,12 @@ class PilotApp:
         self.pending_ui: dict[str, Any] | None = None
         self.auth_file = Path(cfg.data_dir) / "auth.json"
         self.prompt_inbox_dir = Path(cfg.data_dir) / "prompt_inbox"
+        self.telegram_file_outbox_dir = Path(cfg.data_dir) / "telegram_file_outbox"
 
     async def run(self) -> None:
         self._load_auth()
+        self._install_telegram_file_extension()
+        os.environ["PILOT_TELEGRAM_FILE_OUTBOX"] = str(self.telegram_file_outbox_dir)
         await self.pi.start()
         await self._remember_current_session()
         # Process Telegram updates concurrently so one stuck command handler cannot
@@ -76,6 +80,7 @@ class PilotApp:
         self.app.add_handler(MessageHandler(filters.ALL, self.on_update))
         asyncio.create_task(self.worker())
         asyncio.create_task(self.prompt_inbox_watcher())
+        asyncio.create_task(self.telegram_file_outbox_watcher())
         await self.app.initialize()
         await self.app.start()
         await self.app.updater.start_polling()  # type: ignore[union-attr]
@@ -398,6 +403,40 @@ class PilotApp:
             await asyncio.sleep(float(e.retry_after))
         except (BadRequest, NetworkError, TimedOut) as e:
             log.warning("telegram update failed: %s", e)
+
+    def _install_telegram_file_extension(self) -> None:
+        ext_dir = Path(self.cfg.workdir) / ".pi" / "extensions"
+        ext_dir.mkdir(parents=True, exist_ok=True)
+        source = Path(__file__).with_name("telegram_file_extension.ts")
+        (ext_dir / "pilot-telegram-file.ts").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+    async def telegram_file_outbox_watcher(self) -> None:
+        self.telegram_file_outbox_dir.mkdir(parents=True, exist_ok=True)
+        while True:
+            try:
+                for path in sorted(self.telegram_file_outbox_dir.glob("*.json")):
+                    if self.main_chat_id is None or not self.app:
+                        break
+                    try:
+                        data = json.loads(path.read_text(encoding="utf-8"))
+                        file_path = Path(str(data.get("path") or ""))
+                        if not file_path.is_file():
+                            raise ValueError(f"not a file: {file_path}")
+                        caption = str(data.get("caption") or "")[:1024] or None
+                        with file_path.open("rb") as f:
+                            await self.app.bot.send_document(self.main_chat_id, document=f, filename=file_path.name, caption=caption)
+                        path.unlink(missing_ok=True)
+                    except Exception as e:
+                        log.exception("failed to send Telegram file request %s", path)
+                        try:
+                            path.rename(path.with_suffix(".error"))
+                        except Exception:
+                            pass
+                        if self.main_chat_id and self.app:
+                            await self.app.bot.send_message(self.main_chat_id, f"Telegram file send error: {e}")
+            except Exception:
+                log.exception("telegram file outbox watcher failed")
+            await asyncio.sleep(1)
 
     async def prompt_inbox_watcher(self) -> None:
         self.prompt_inbox_dir.mkdir(parents=True, exist_ok=True)

@@ -38,6 +38,7 @@ The goal of this repo is a small self-contained Docker service that lets one aut
 - Injects a configurable behavior prompt at the beginning of new sessions.
 - Streams pi thinking/status/final output into Telegram by editing the active response message.
 - Queues prompts while pi is busy and executes them FIFO.
+- Exposes a small pi extension tool that can send local files back to the authorized Telegram chat when the user asks for them.
 - Intercepts pi.lot-specific slash commands and forwards unknown slash commands to pi, so `/login`, `/model`, `/skill:name`, prompt templates, and extension commands can still work.
 - Installs a set of self-contained pi skills into the Docker image.
 
@@ -105,6 +106,8 @@ cp .env.example .env
 The Docker image includes Python, bash, cron, SSH client/server tooling, Node/npm, the latest pi package, and the bundled skills. It also writes a small pi `models.json` provider-header override for `kimi-coding` to avoid Kimi's misleading 429 response to the default Anthropic SDK User-Agent.
 
 ## Telegram commands
+
+pi.lot also installs a tiny pi extension tool, `send_telegram_file`, into the workspace. This lets the agent send a local file to the authorized Telegram chat, for example when you ask: “send me your local log file”.
 
 pi.lot handles these commands itself:
 
