@@ -165,7 +165,7 @@ Bundled pi extensions live in the repository-level `pi_extensions/` folder. Duri
 /workspace/.pi/extensions
 ```
 
-pi auto-discovers both global extensions (`~/.pi/agent/extensions`) and project-local extensions (`.pi/extensions`). pi.lot installs bundled extensions only project-locally to avoid loading the same tool from both locations when `/workspace` persists across deployments. To add another pi agent tool, add another `.ts` file to `pi_extensions/`, update the startup sync if needed, rebuild/redeploy the container, and pi will load it on startup.
+pi auto-discovers both global extensions (`~/.pi/agent/extensions`) and project-local extensions (`.pi/extensions`). pi.lot installs bundled extensions only project-locally to avoid loading the same tool from both locations when `/workspace` persists across deployments. To add another pi agent tool, add another `.ts` file to `pi_extensions/`, rebuild/redeploy the container, and pi will load it on startup.
 
 ## Cronjobs
 

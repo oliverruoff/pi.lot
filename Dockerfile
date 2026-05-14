@@ -47,6 +47,7 @@ RUN mkdir -p /workspace/data
 CMD ["sh", "-c", "set -eu; \
     cron; \
     mkdir -p /workspace/.pi/extensions; \
-    cp /app/pi_extensions/telegram_file_extension.ts /workspace/.pi/extensions/pilot-telegram-file.ts; \
+    rm -f /workspace/.pi/extensions/telegram_file_extension.ts; \
+    cp /app/pi_extensions/*.ts /workspace/.pi/extensions/; \
     python /root/.agents/skills/cronjobs/scripts/cron_cli.py sync || true; \
     exec python -m pilot"]
