@@ -81,13 +81,72 @@ def _inline_markdown_to_markdown_v2(text: str) -> str:
     return text
 
 
+def _parse_table_row(line: str) -> list[str]:
+    line = line.strip()
+    if line.startswith("|"):
+        line = line[1:]
+    if line.endswith("|"):
+        line = line[:-1]
+    return [cell.strip() for cell in line.split("|")]
+
+
+def _is_table_separator(cells: list[str]) -> bool:
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells)
+
+
+def _render_table_as_cards(table_lines: list[str]) -> list[str] | None:
+    rows = [_parse_table_row(line) for line in table_lines]
+    if len(rows) < 2 or not _is_table_separator(rows[1]):
+        return None
+
+    headers = rows[0]
+    body_rows = rows[2:]
+    if len(headers) < 2 or not body_rows:
+        return None
+
+    width = len(headers)
+    normalized: list[list[str]] = []
+    for row in body_rows:
+        if len(row) < 2:
+            continue
+        normalized.append((row + [""] * width)[:width])
+    if not normalized:
+        return None
+
+    rendered: list[str] = []
+    if width == 2:
+        rendered.append(f"{_inline_markdown_to_markdown_v2(headers[0])} / {_inline_markdown_to_markdown_v2(headers[1])}")
+        rendered.append("")
+        for key, value in normalized:
+            rendered.append(f"\\- {_inline_markdown_to_markdown_v2(key)}: {_inline_markdown_to_markdown_v2(value)}")
+        return rendered
+
+    rendered.append("Table")
+    rendered.append("")
+    for idx, row in enumerate(normalized, start=1):
+        title = row[0] or f"Row {idx}"
+        rendered.append(f"{idx}\\. {_inline_markdown_to_markdown_v2(title)}")
+        for header, value in zip(headers[1:], row[1:]):
+            if value:
+                rendered.append(f"\\- {_inline_markdown_to_markdown_v2(header)}: {_inline_markdown_to_markdown_v2(value)}")
+        rendered.append("")
+    if rendered[-1] == "":
+        rendered.pop()
+    return rendered
+
+
 def _flush_table(table_lines: list[str], lines: list[str]) -> None:
     if not table_lines:
         return
-    lines.append("```")
-    for tl in table_lines:
-        lines.append(_escape_code_markdown_v2(tl))
-    lines.append("```")
+
+    rendered = _render_table_as_cards(table_lines)
+    if rendered is not None:
+        lines.extend(rendered)
+    else:
+        lines.append("```")
+        for tl in table_lines:
+            lines.append(_escape_code_markdown_v2(tl))
+        lines.append("```")
     table_lines.clear()
 
 
