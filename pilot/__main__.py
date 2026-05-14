@@ -381,6 +381,41 @@ class PilotApp:
         parts = format_for_telegram(text, markdown_v2=markdown)
         parse_mode = ParseMode.MARKDOWN_V2 if markdown else None
         bot = self.app.bot
+
+        async def send_parts() -> None:
+            for part in parts:
+                await bot.send_message(self.current_reply.chat_id, part or " ", parse_mode=parse_mode)
+
+        try:
+            try:
+                await send_parts()
+            except RetryAfter as e:
+                await asyncio.sleep(float(e.retry_after))
+                await send_parts()
+        except BadRequest as e:
+            log.warning("telegram final markdown send failed; retrying plain text: %s", e)
+            parts = format_for_telegram(text, markdown_v2=False)
+            parse_mode = None
+            try:
+                try:
+                    await send_parts()
+                except RetryAfter as retry:
+                    await asyncio.sleep(float(retry.retry_after))
+                    await send_parts()
+            except Exception:
+                log.exception("telegram final plain-text send failed; keeping thinking message")
+                return
+        except (NetworkError, TimedOut) as e:
+            log.warning("telegram final send failed; retrying once: %s", e)
+            try:
+                await send_parts()
+            except Exception:
+                log.exception("telegram final send retry failed; keeping thinking message")
+                return
+        except Exception:
+            log.exception("telegram final send failed; keeping thinking message")
+            return
+
         for mid in [self.current_reply.main_message_id, *self.current_reply.extra_message_ids]:
             if mid is None:
                 continue
@@ -389,8 +424,6 @@ class PilotApp:
             except Exception:
                 pass
         self.current_reply.extra_message_ids.clear()
-        for part in parts:
-            await bot.send_message(self.current_reply.chat_id, part or " ", parse_mode=parse_mode)
 
     async def update_reply(self, text: str, force: bool = False) -> None:
         if not self.current_reply or not self.app:
