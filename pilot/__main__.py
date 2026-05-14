@@ -72,7 +72,6 @@ class PilotApp:
 
     async def run(self) -> None:
         self._load_auth()
-        self._install_telegram_file_extension()
         os.environ["PILOT_TELEGRAM_FILE_OUTBOX"] = str(self.telegram_file_outbox_dir)
         await self.pi.start()
         await self._remember_current_session()
@@ -428,12 +427,6 @@ class PilotApp:
             await asyncio.sleep(float(e.retry_after))
         except (BadRequest, NetworkError, TimedOut) as e:
             log.warning("telegram update failed: %s", e)
-
-    def _install_telegram_file_extension(self) -> None:
-        ext_dir = Path(self.cfg.workdir) / ".pi" / "extensions"
-        ext_dir.mkdir(parents=True, exist_ok=True)
-        source = Path(__file__).with_name("telegram_file_extension.ts")
-        (ext_dir / "pilot-telegram-file.ts").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
     async def telegram_file_outbox_watcher(self) -> None:
         self.telegram_file_outbox_dir.mkdir(parents=True, exist_ok=True)

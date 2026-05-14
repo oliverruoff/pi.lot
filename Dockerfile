@@ -35,7 +35,15 @@ COPY requirements.txt ./
 RUN pip install -r requirements.txt
 COPY pilot ./pilot
 COPY pilot/skills /root/.agents/skills
+COPY pi_extensions/ /root/.pi/agent/extensions/
 
 RUN mkdir -p /workspace/data
 
-CMD ["sh", "-c", "cron && python /root/.agents/skills/cronjobs/scripts/cron_cli.py sync || true; python -m pilot"]
+# Startup tasks:
+# - start cron
+# - sync cronjobs
+# - start pi.lot
+CMD ["sh", "-c", "set -eu; \
+    cron; \
+    python /root/.agents/skills/cronjobs/scripts/cron_cli.py sync || true; \
+    exec python -m pilot"]

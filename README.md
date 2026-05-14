@@ -23,6 +23,7 @@ The goal of this repo is a small self-contained Docker service that lets one aut
 - [Telegram commands](#telegram-commands)
 - [Sessions](#sessions)
 - [Skills](#skills)
+- [Extensions](#extensions)
 - [Cronjobs](#cronjobs)
 - [Configuration](#configuration)
 - [Repository layout](#repository-layout)
@@ -108,7 +109,7 @@ The Docker image includes Python, bash, cron, SSH client/server tooling, Node/np
 
 ## Telegram commands
 
-pi.lot also installs a tiny pi extension tool, `send_telegram_file`, into the workspace. This lets the agent send a local file to the authorized Telegram chat, for example when you ask: “send me your local log file”. Files you send to the bot are saved under `/workspace/data/files_received` and the saved path is included in the prompt to pi.
+pi.lot includes a tiny pi extension tool, `send_telegram_file`. Bundled `.ts` files from `pi_extensions/` are baked into pi's global extensions folder in the Docker image, so pi can auto-detect them. `send_telegram_file` lets the agent send a local file to the authorized Telegram chat, for example when you ask: “send me your local log file”. Files you send to the bot are saved under `/workspace/data/files_received` and the saved path is included in the prompt to pi.
 
 pi.lot handles these commands itself:
 
@@ -155,6 +156,16 @@ Bundled skills are copied into `/root/.agents/skills` in the Docker image. Each 
 | `cronjobs` | None | None |
 | `brave-search` | `BRAVE_SEARCH_API_KEY` | None |
 | `home-assistant` | `HOME_ASSISTANT_TOKEN` | `HOME_ASSISTANT_URL` (default `http://homeassistant.local:8123`) |
+
+## Extensions
+
+Bundled pi extensions live in the repository-level `pi_extensions/` folder. During Docker build they are copied to pi's global extension folder:
+
+```text
+/root/.pi/agent/extensions
+```
+
+pi auto-discovers both global extensions (`~/.pi/agent/extensions`) and project-local extensions (`.pi/extensions`). Using the global folder keeps bundled image extensions separate from the mounted `/workspace`. To add another pi agent tool, add another `.ts` file to `pi_extensions/`, rebuild/redeploy the container, and pi will load it on startup.
 
 ## Cronjobs
 
@@ -232,6 +243,7 @@ pilot/config.py        environment + persisted config loading
 pilot/telegram_format.py
                        Telegram-safe formatting/splitting
 pilot/skills/          bundled self-contained pi skills
+pi_extensions/         bundled pi TypeScript extensions copied into the image
 markdowns/             implementation/specification notes
 workspace/             local persistent workspace mount target
 Dockerfile             self-contained runtime image
