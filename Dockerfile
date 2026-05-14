@@ -19,35 +19,25 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /root/.pi/agent \
-    && printf '%s\n' \
-        '{' \
-        '  "providers": {' \
-        '    "kimi-coding": {' \
-        '      "headers": { "User-Agent": "gsd-pi" }' \
-        '    }' \
-        '  }' \
-        '}' \
-        > /root/.pi/agent/models.json
+RUN mkdir -p /root/.pi/agent
+
+# add specific model configs (e.g. for improving kimi-code usage)
+COPY models.json /root/.pi/agent/models.json
 
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 COPY pilot ./pilot
-COPY pilot/skills /root/.agents/skills
-COPY pi_extensions/ ./pi_extensions/
+COPY pilot/skills /root/.pi/agent/skills/
+COPY pi_extensions/ /root/.pi/agent/extensions/
 
 RUN mkdir -p /workspace/data
 
 # Startup tasks:
 # - start cron
-# - sync bundled pi extensions into the mounted workspace
 # - sync cronjobs
 # - start pi.lot
 CMD ["sh", "-c", "set -eu; \
     cron; \
-    mkdir -p /workspace/.pi/extensions; \
-    rm -f /workspace/.pi/extensions/telegram_file_extension.ts; \
-    cp /app/pi_extensions/*.ts /workspace/.pi/extensions/; \
-    python /root/.agents/skills/cronjobs/scripts/cron_cli.py sync || true; \
+    python /root/.pi/agent/skills/cronjobs/scripts/cron_cli.py sync || true; \
     exec python -m pilot"]

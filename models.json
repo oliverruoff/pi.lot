@@ -1,0 +1,7 @@
+{
+  "providers": {
+    "kimi-coding": {
+      "headers": { "User-Agent": "gsd-pi" }
+    }
+  }
+}
