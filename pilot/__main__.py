@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from telegram import Update
-from telegram.constants import ParseMode
+from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 from telegram.ext import Application, ApplicationBuilder, ContextTypes, MessageHandler, filters
 
@@ -108,6 +108,7 @@ class PilotApp:
         if received_file:
             prompt_text = msg.caption or "User sent a Telegram file."
             await self.queue.put(WorkItem(f"{prompt_text}\n\nReceived Telegram file saved at: {received_file}"))
+            await self._send_typing_action()
             await context.bot.send_message(chat_id, f"Downloaded file to {received_file}")
             if self.busy:
                 await context.bot.send_message(chat_id, f"Queued ({self.queue.qsize()} pending).")
@@ -126,6 +127,7 @@ class PilotApp:
             return
 
         await self.queue.put(WorkItem(text))
+        await self._send_typing_action()
         if self.busy:
             await context.bot.send_message(chat_id, f"Queued ({self.queue.qsize()} pending).")
 
@@ -222,6 +224,7 @@ class PilotApp:
         while True:
             item = await self.queue.get()
             self.busy = True
+            typing_task = asyncio.create_task(self._typing_loop())
             self.current_text = ""
             self.current_thinking = ""
             self.current_status = ""
@@ -261,9 +264,25 @@ class PilotApp:
                         self.active_session_no = previous_active
                     except Exception:
                         log.exception("failed to restore active session after cronjob")
+                typing_task.cancel()
                 self.current_reply = None
                 self.busy = False
                 self.queue.task_done()
+
+    async def _send_typing_action(self) -> None:
+        if self.main_chat_id and self.app:
+            try:
+                await self.app.bot.send_chat_action(self.main_chat_id, ChatAction.TYPING)
+            except Exception:
+                log.debug("failed to send typing action", exc_info=True)
+
+    async def _typing_loop(self) -> None:
+        try:
+            while True:
+                await self._send_typing_action()
+                await asyncio.sleep(4)
+        except asyncio.CancelledError:
+            pass
 
     async def on_pi_event(self, event: dict[str, Any]) -> None:
         typ = event.get("type")
