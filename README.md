@@ -39,6 +39,7 @@ The goal of this repo is a small self-contained Docker service that lets one aut
 - Streams pi thinking/status/final output into Telegram by editing the active response message.
 - Queues prompts while pi is busy and executes them FIFO.
 - Exposes a small pi extension tool that can send local files back to the authorized Telegram chat when the user asks for them.
+- Downloads files sent by the authorized Telegram user into `/workspace/data/files_received` and passes their paths to pi for analysis.
 - Intercepts pi.lot-specific slash commands and forwards unknown slash commands to pi, so `/login`, `/model`, `/skill:name`, prompt templates, and extension commands can still work.
 - Installs a set of self-contained pi skills into the Docker image.
 
@@ -107,7 +108,7 @@ The Docker image includes Python, bash, cron, SSH client/server tooling, Node/np
 
 ## Telegram commands
 
-pi.lot also installs a tiny pi extension tool, `send_telegram_file`, into the workspace. This lets the agent send a local file to the authorized Telegram chat, for example when you ask: “send me your local log file”.
+pi.lot also installs a tiny pi extension tool, `send_telegram_file`, into the workspace. This lets the agent send a local file to the authorized Telegram chat, for example when you ask: “send me your local log file”. Files you send to the bot are saved under `/workspace/data/files_received` and the saved path is included in the prompt to pi.
 
 pi.lot handles these commands itself:
 

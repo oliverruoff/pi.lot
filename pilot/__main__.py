@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,7 @@ class PilotApp:
         self.auth_file = Path(cfg.data_dir) / "auth.json"
         self.prompt_inbox_dir = Path(cfg.data_dir) / "prompt_inbox"
         self.telegram_file_outbox_dir = Path(cfg.data_dir) / "telegram_file_outbox"
+        self.files_received_dir = Path(cfg.data_dir) / "files_received"
 
     async def run(self) -> None:
         self._load_auth()
@@ -101,9 +103,18 @@ class PilotApp:
             await context.bot.send_message(chat_id, "This pi.lot instance is already bound to another user.")
             return
 
-        text = update.effective_message.text if update.effective_message else None
+        msg = update.effective_message
+        text = (msg.text or msg.caption) if msg else None
+        received_file = await self._download_incoming_file(msg, context) if msg else None
+        if received_file:
+            prompt_text = msg.caption or "User sent a Telegram file."
+            await self.queue.put(WorkItem(f"{prompt_text}\n\nReceived Telegram file saved at: {received_file}"))
+            await context.bot.send_message(chat_id, f"Downloaded file to {received_file}")
+            if self.busy:
+                await context.bot.send_message(chat_id, f"Queued ({self.queue.qsize()} pending).")
+            return
         if not text:
-            await context.bot.send_message(chat_id, "Only text messages are supported in version 1.")
+            await context.bot.send_message(chat_id, "Only text messages and file attachments are supported.")
             return
 
         # Rescue commands must preempt extension UI prompts. Otherwise /stop can be
@@ -193,6 +204,20 @@ class PilotApp:
                 self.queue.task_done()
                 cleared += 1
         return cleared
+
+    async def _download_incoming_file(self, msg: Any, context: ContextTypes.DEFAULT_TYPE) -> str | None:
+        attachment = msg.document or (msg.photo[-1] if msg.photo else None) or msg.effective_attachment
+        if isinstance(attachment, (list, tuple)):
+            attachment = attachment[-1] if attachment else None
+        if not attachment or not getattr(attachment, "file_id", None):
+            return None
+        name = getattr(attachment, "file_name", None) or f"telegram-photo-{getattr(attachment, 'file_unique_id', uuid.uuid4().hex)}.jpg"
+        safe = "".join(c if c.isalnum() or c in ".-_" else "_" for c in name).strip("._") or "telegram-file"
+        dest = self.files_received_dir / f"{uuid.uuid4().hex}-{safe}"
+        self.files_received_dir.mkdir(parents=True, exist_ok=True)
+        tg_file = await context.bot.get_file(attachment.file_id)
+        await tg_file.download_to_drive(custom_path=str(dest))
+        return str(dest)
 
     async def worker(self) -> None:
         while True:
