@@ -107,11 +107,13 @@ class PilotApp:
         received_file = await self._download_incoming_file(msg, context) if msg else None
         if received_file:
             prompt_text = msg.caption or "User sent a Telegram file."
+            was_busy = self.busy
             await self.queue.put(WorkItem(f"{prompt_text}\n\nReceived Telegram file saved at: {received_file}"))
             await self._send_typing_action()
             await context.bot.send_message(chat_id, f"Downloaded file to {received_file}")
-            if self.busy:
-                await context.bot.send_message(chat_id, f"Queued ({self.queue.qsize()} pending).")
+            pending = self.queue.qsize()
+            if was_busy and pending:
+                await context.bot.send_message(chat_id, f"Queued ({pending} pending).")
             return
         if not text:
             await context.bot.send_message(chat_id, "Only text messages and file attachments are supported.")
@@ -126,10 +128,12 @@ class PilotApp:
             await self._answer_pending_ui(text, context)
             return
 
+        was_busy = self.busy
         await self.queue.put(WorkItem(text))
         await self._send_typing_action()
-        if self.busy:
-            await context.bot.send_message(chat_id, f"Queued ({self.queue.qsize()} pending).")
+        pending = self.queue.qsize()
+        if was_busy and pending:
+            await context.bot.send_message(chat_id, f"Queued ({pending} pending).")
 
     async def _handle_pilot_command(self, text: str, context: ContextTypes.DEFAULT_TYPE) -> bool:
         chat_id = self.main_chat_id
