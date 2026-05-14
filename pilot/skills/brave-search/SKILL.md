@@ -91,5 +91,6 @@ Options are the same as web search. Returns a JSON array of news results with `t
 
 - If the user asks for current news or recent events, prefer the `news` command with `--freshness pw` or `pd`.
 - If the user asks to research a topic or look up facts, use the `search` command.
+- Do not run Brave Search requests in parallel. Free API keys have strict rate limits, so run queries sequentially and wait briefly between multiple searches.
 - Summarize results concisely. Always include source URLs when referencing information.
 - Do not invent facts; only use what is returned by the API.
