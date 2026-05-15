@@ -24,9 +24,12 @@ class PiRPC:
         self._agent_done: asyncio.Event | None = None
         self._agent_started = False
         self._agent_activity = False
+        self._agent_finished = False
         self._retrying = False
         self._reader_task: asyncio.Task | None = None
         self._stderr_task: asyncio.Task | None = None
+        self._event_task: asyncio.Task | None = None
+        self._event_queue: asyncio.Queue[dict[str, Any]] | None = None
 
     async def start(self) -> None:
         os.makedirs(self.cwd, exist_ok=True)
@@ -45,10 +48,13 @@ class PiRPC:
             # stuck on "Thinking…" forever even though pi finished the session.
             limit=16 * 1024 * 1024,
         )
+        self._event_queue = asyncio.Queue()
         self._reader_task = asyncio.create_task(self._read_stdout())
         self._stderr_task = asyncio.create_task(self._read_stderr())
+        self._event_task = asyncio.create_task(self._dispatch_events())
         self._reader_task.add_done_callback(self._log_task_failure)
         self._stderr_task.add_done_callback(self._log_task_failure)
+        self._event_task.add_done_callback(self._log_task_failure)
         log.info("started pi RPC: %s %s", self.command, " ".join(self.args))
 
     def _log_task_failure(self, task: asyncio.Task) -> None:
@@ -84,15 +90,19 @@ class PiRPC:
             except asyncio.TimeoutError:
                 self.proc.kill()
                 await self.proc.wait()
-        for task in (self._reader_task, self._stderr_task):
+        for task in (self._reader_task, self._stderr_task, self._event_task):
             if task and not task.done():
                 task.cancel()
+        self._event_queue = None
 
     async def restart(self) -> None:
         await self.stop()
         await self.start()
 
     async def send(self, cmd: dict[str, Any], wait_response: bool = True, timeout: float = 30.0) -> dict[str, Any] | None:
+        if not self.proc or not self.proc.stdin or self.proc.returncode is not None:
+            log.warning("pi RPC process is not running; restarting")
+            await self.restart()
         if not self.proc or not self.proc.stdin or self.proc.returncode is not None:
             raise RuntimeError("pi RPC process is not running")
         req_id = cmd.get("id") or str(uuid.uuid4())
@@ -119,6 +129,7 @@ class PiRPC:
         self._agent_done = asyncio.Event()
         self._agent_started = False
         self._agent_activity = False
+        self._agent_finished = False
         self._retrying = False
         cmd: dict[str, Any] = {"type": "prompt", "message": message}
         if streaming_behavior:
@@ -152,7 +163,10 @@ class PiRPC:
                             break
                     except Exception:
                         pass
+        failed = bool(self.proc and self.proc.returncode is not None and not self._agent_finished)
         self._agent_done = None
+        if failed:
+            raise RuntimeError("pi RPC process exited before finishing prompt")
 
     async def new_session(self) -> dict[str, Any]:
         resp = await self.send({"type": "new_session"})
@@ -215,14 +229,26 @@ class PiRPC:
                 self._retrying = True
             if typ == "auto_retry_end":
                 self._retrying = False
-                if msg.get("success") is False and self._agent_done:
-                    self._agent_done.set()
-            if typ == "agent_end" and self._agent_done:
-                self._agent_done.set()
+            if self._event_queue is not None:
+                self._event_queue.put_nowait(msg)
+
+    async def _dispatch_events(self) -> None:
+        assert self._event_queue is not None
+        while True:
+            msg = await self._event_queue.get()
             try:
                 await self.on_event(msg)
             except Exception:
                 log.exception("pi event handler failed")
+            finally:
+                typ = msg.get("type")
+                if typ == "agent_end":
+                    self._agent_finished = True
+                    if self._agent_done:
+                        self._agent_done.set()
+                if typ == "auto_retry_end" and msg.get("success") is False and self._agent_done:
+                    self._agent_done.set()
+                self._event_queue.task_done()
 
     async def _read_stderr(self) -> None:
         assert self.proc and self.proc.stderr
