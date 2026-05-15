@@ -76,8 +76,16 @@ def _inline_markdown_to_markdown_v2(text: str) -> str:
     text = _ITALIC_RE.sub(italic_repl, text)
 
     text = escape_markdown_v2(text)
-    for key, value in protected.items():
-        text = text.replace(key, value)
+    # Protected replacements may contain other protected markers when Markdown is
+    # nested, e.g. **`/reload`**. Restore until no markers remain.
+    for _ in range(len(protected) + 1):
+        changed = False
+        for key, value in protected.items():
+            if key in text:
+                text = text.replace(key, value)
+                changed = True
+        if not changed:
+            break
     return text
 
 
