@@ -385,7 +385,34 @@ class PilotApp:
             return message
         if not isinstance(message, dict):
             return ""
-        return str(message.get("errorMessage") or message.get("message") or "").strip()
+
+        error = str(message.get("errorMessage") or message.get("message") or "").strip()
+        if not error:
+            error = next(
+                (
+                    str(item.get("errorMessage") or item.get("message") or "").strip()
+                    for item in message.get("content") or []
+                    if isinstance(item, dict) and item.get("type") == "error"
+                ),
+                "",
+            )
+        if message.get("stopReason") != "error":
+            return error
+
+        details = [
+            value
+            for value in (
+                f"provider/model: {'/'.join(str(v) for v in (message.get('provider'), message.get('model')) if v)}",
+                f"responseId: {message.get('responseId')}",
+                f"session: {self.sessions.get(self.active_session_no or -1)}",
+            )
+            if not value.endswith((': None', ': '))
+        ]
+        lines = [error or "Provider returned an error before completing the response."]
+        if details:
+            lines.extend(["", "Details:", *[f"- {detail}" for detail in details]])
+        lines.extend(["", "The session should still be usable; you can continue in it if you want."])
+        return "\n".join(lines)
 
     def _compose_display(self) -> str:
         body = self.current_text.strip()
