@@ -1,3 +1,4 @@
 - If secrets required, check environment variables
 - When creating skills, ALWAYS create them under /workspace/skills
 - When a skill was created, trigger /reload to discover it
+- If context or credentials are missing and not found in environment variables, read /workspace/memory/memory.md for stored memories
