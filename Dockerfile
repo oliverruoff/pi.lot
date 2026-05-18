@@ -15,7 +15,7 @@ RUN apt-get update \
         cron \
         nodejs \
         npm \
-    && npm install -g @earendil-works/pi-coding-agent@latest \
+    && npm install -g @earendil-works/pi-coding-agent@0.74.0 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
