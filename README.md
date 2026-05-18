@@ -109,7 +109,7 @@ The Docker image includes Python, bash, cron, SSH client/server tooling, Node/np
 
 ## Telegram commands
 
-pi.lot includes a tiny pi extension tool, `send_telegram_file`. Bundled `.ts` files from `pi_extensions/` are copied into the mounted workspace's project-local pi extensions folder on container startup, so pi can auto-detect them without also loading a duplicate global extension. `send_telegram_file` lets the agent send a local file to the authorized Telegram chat, for example when you ask: “send me your local log file”. Files you send to the bot are saved under `/workspace/data/files_received` and the saved path is included in the prompt to pi.
+pi.lot includes a tiny pi extension tool, `send_telegram_file`. Bundled `.ts` files from `pi_extensions/` are installed as global pi extensions in the image, and pi.lot removes matching stale copies from `/workspace/.pi/extensions` on startup so persistent workspaces do not load duplicate tools. `send_telegram_file` lets the agent send a local file to the authorized Telegram chat, for example when you ask: "send me your local log file". Files you send to the bot are saved under `/workspace/data/files_received` and the saved path is included in the prompt to pi.
 
 pi.lot handles these commands itself:
 
@@ -159,13 +159,13 @@ Bundled skills are copied into `/root/.pi/agent/skills` in the Docker image. Use
 
 ## Extensions
 
-Bundled pi extensions live in the repository-level `pi_extensions/` folder. During Docker build they are copied into the image under `/app/pi_extensions`; on container startup they are synced into the mounted workspace's project-local extension folder:
+Bundled pi extensions live in the repository-level `pi_extensions/` folder. During Docker build they are copied into the image under:
 
 ```text
-/workspace/.pi/extensions
+/root/.pi/agent/extensions
 ```
 
-pi auto-discovers both global extensions (`~/.pi/agent/extensions`) and project-local extensions (`.pi/extensions`). pi.lot installs bundled extensions only project-locally to avoid loading the same tool from both locations when `/workspace` persists across deployments. To add another pi agent tool, add another `.ts` file to `pi_extensions/`, rebuild/redeploy the container, and pi will load it on startup.
+pi auto-discovers both global extensions (`~/.pi/agent/extensions`) and project-local extensions (`.pi/extensions`). pi.lot keeps bundled extensions global and removes matching stale copies from `/workspace/.pi/extensions` on startup so persistent workspaces do not load duplicate tools. To add another pi agent tool, add another `.ts` file to `pi_extensions/`, rebuild/redeploy the container, and pi will load it on startup.
 
 ## Cronjobs
 
@@ -243,7 +243,7 @@ pilot/config.py        environment + persisted config loading
 pilot/telegram_format.py
                        Telegram-safe formatting/splitting
 pilot/skills/          bundled self-contained pi skills
-pi_extensions/         bundled pi TypeScript extensions copied into the image
+pi_extensions/         bundled pi TypeScript extensions installed globally in the image
 markdowns/             implementation/specification notes
 workspace/             local persistent workspace mount target
 Dockerfile             self-contained runtime image

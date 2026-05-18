@@ -1,7 +1,11 @@
+FROM node:22-bookworm-slim AS node
+
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
+
+COPY --from=node /usr/local/ /usr/local/
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -13,8 +17,6 @@ RUN apt-get update \
         ca-certificates \
         tzdata \
         cron \
-        nodejs \
-        npm \
     && npm install -g @earendil-works/pi-coding-agent@0.75.3 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -35,7 +37,7 @@ COPY pilot/skills /root/.pi/agent/skills/
 # /workspace/skills is not a documented auto-discovery directory.
 RUN ln -s /workspace/skills /root/.pi/agent/skills
 
-# load pi.lot built-in extensions 
+# load pi.lot built-in extensions globally
 COPY pilot/pi_extensions/ /root/.pi/agent/extensions/
 
 WORKDIR /app
@@ -46,10 +48,8 @@ COPY pilot ./pilot
 RUN mkdir -p /workspace/data
 
 # Startup tasks:
+# - remove stale workspace copies of bundled extensions
 # - start cron
 # - sync cronjobs
 # - start pi.lot
-CMD ["sh", "-c", "set -eu; \
-    cron; \
-    python /root/.pi/agent/skills/cronjobs/scripts/cron_cli.py sync || true; \
-    exec python -m pilot"]
+CMD ["sh", "-c", "set -eu; for ext in /root/.pi/agent/extensions/*.ts; do [ -e \"$ext\" ] || continue; base=${ext##*/}; rm -f \"/workspace/.pi/extensions/$base\"; done; cron; python /root/.pi/agent/skills/cronjobs/scripts/cron_cli.py sync || true; exec python -m pilot"]
