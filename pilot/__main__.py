@@ -63,7 +63,6 @@ class PilotApp:
         self.behavior_prompt = cfg.behavior_prompt
         self.inject_behavior_next = True
         self.sessions: dict[int, str] = {}
-        self.session_titles: dict[int, str] = {}
         self.active_session_no: int | None = None
         self.pending_ui: dict[str, Any] | None = None
         self.auth_file = Path(cfg.data_dir) / "auth.json"
@@ -73,6 +72,7 @@ class PilotApp:
 
     async def run(self) -> None:
         self._load_auth()
+        self._load_sessions_at_startup()
         os.environ["PILOT_TELEGRAM_FILE_OUTBOX"] = str(self.telegram_file_outbox_dir)
         await self.pi.start()
         await self._remember_current_session()
@@ -157,7 +157,7 @@ class PilotApp:
                 items = items[-20:]
             for no, path in items:
                 mark = "*" if no == self.active_session_no else " "
-                title = self.session_titles.get(no, "Untitled")
+                title = self._extract_session_title(path)
                 lines.append(f"{mark} {no}: {title}")
             await context.bot.send_message(chat_id, "\n".join(lines))
         elif cmd == "/session":
@@ -609,6 +609,17 @@ class PilotApp:
         except Exception:
             log.exception("failed to load auth file")
 
+    def _load_sessions_at_startup(self) -> None:
+        try:
+            session_dir = Path(self.cfg.data_dir) / "pi-sessions"
+            if not session_dir.exists():
+                return
+            for path in sorted(session_dir.glob("*.jsonl")):
+                no = max(self.sessions.keys(), default=0) + 1
+                self.sessions[no] = str(path)
+        except Exception:
+            log.exception("failed to load sessions at startup")
+
     def _save_config(self) -> None:
         try:
             self.cfg = replace(self.cfg, behavior_prompt=self.behavior_prompt, main_user_id=self.main_user_id, main_chat_id=self.main_chat_id)
@@ -659,7 +670,6 @@ class PilotApp:
                 return
         no = max(self.sessions.keys(), default=0) + 1
         self.sessions[no] = path
-        self.session_titles[no] = self._extract_session_title(path)
         if make_active:
             self.active_session_no = no
 
