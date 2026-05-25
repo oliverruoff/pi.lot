@@ -63,6 +63,7 @@ class PilotApp:
         self.behavior_prompt = cfg.behavior_prompt
         self.inject_behavior_next = True
         self.sessions: dict[int, str] = {}
+        self.session_titles: dict[int, str] = {}
         self.active_session_no: int | None = None
         self.pending_ui: dict[str, Any] | None = None
         self.auth_file = Path(cfg.data_dir) / "auth.json"
@@ -150,9 +151,14 @@ class PilotApp:
         elif cmd == "/sessions":
             await self._remember_current_session()
             lines = ["Known sessions:"]
-            for no, path in sorted(self.sessions.items()):
+            items = sorted(self.sessions.items())
+            if len(items) > 20:
+                lines.append(f"  (showing last 20 of {len(items)} sessions)")
+                items = items[-20:]
+            for no, path in items:
                 mark = "*" if no == self.active_session_no else " "
-                lines.append(f"{mark} {no}: {path}")
+                title = self.session_titles.get(no, "Untitled")
+                lines.append(f"{mark} {no}: {title}")
             await context.bot.send_message(chat_id, "\n".join(lines))
         elif cmd == "/session":
             if not arg.strip().isdigit() or int(arg.strip()) not in self.sessions:
@@ -618,6 +624,26 @@ class PilotApp:
         except Exception:
             log.exception("failed to save auth file")
 
+    def _extract_session_title(self, path: str) -> str:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    data = json.loads(line)
+                    if data.get("type") == "message":
+                        msg = data.get("message", {})
+                        if msg.get("role") == "user":
+                            for item in msg.get("content", []):
+                                if isinstance(item, dict) and item.get("type") == "text":
+                                    text = str(item.get("text", "")).strip()
+                                    if text:
+                                        if "User prompt:" in text:
+                                            text = text.split("User prompt:", 1)[1].strip()
+                                        first = text.split("\n")[0]
+                                        return (first[:57] + "...") if len(first) > 60 else first
+            return "Untitled"
+        except Exception:
+            return "Untitled"
+
     async def _remember_current_session(self, make_active: bool = True) -> None:
         try:
             state = await self.pi.get_state()
@@ -633,6 +659,7 @@ class PilotApp:
                 return
         no = max(self.sessions.keys(), default=0) + 1
         self.sessions[no] = path
+        self.session_titles[no] = self._extract_session_title(path)
         if make_active:
             self.active_session_no = no
 
