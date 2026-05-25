@@ -151,14 +151,17 @@ class PilotApp:
         elif cmd == "/sessions":
             await self._remember_current_session()
             lines = ["Known sessions:"]
-            items = sorted(self.sessions.items())
+            items = sorted(self.sessions.items(), reverse=True)
             if len(items) > 20:
                 lines.append(f"  (showing last 20 of {len(items)} sessions)")
-                items = items[-20:]
-            for no, path in items:
+                items = items[:20]
+            for i, (no, path) in enumerate(items):
                 mark = "*" if no == self.active_session_no else " "
-                title = self._extract_session_title(path)
-                lines.append(f"{mark} {no}: {title}")
+                title, last_time = self._get_session_info(path)
+                time_str = f" ({last_time})" if last_time else ""
+                lines.append(f"{mark} {no}: {title}{time_str}")
+                if i < len(items) - 1:
+                    lines.append("")
             await context.bot.send_message(chat_id, "\n".join(lines))
         elif cmd == "/session":
             if not arg.strip().isdigit() or int(arg.strip()) not in self.sessions:
@@ -635,25 +638,44 @@ class PilotApp:
         except Exception:
             log.exception("failed to save auth file")
 
-    def _extract_session_title(self, path: str) -> str:
+    def _get_session_info(self, path: str) -> tuple[str, str]:
+        """Return (title, last_message_time_str) for a session file."""
+        title = "Untitled"
+        last_time = ""
         try:
             with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    data = json.loads(line)
-                    if data.get("type") == "message":
-                        msg = data.get("message", {})
-                        if msg.get("role") == "user":
-                            for item in msg.get("content", []):
-                                if isinstance(item, dict) and item.get("type") == "text":
-                                    text = str(item.get("text", "")).strip()
-                                    if text:
-                                        if "User prompt:" in text:
-                                            text = text.split("User prompt:", 1)[1].strip()
-                                        first = text.split("\n")[0]
-                                        return (first[:57] + "...") if len(first) > 60 else first
-            return "Untitled"
+                lines = f.readlines()
+            for line in lines:
+                data = json.loads(line)
+                if data.get("type") == "message":
+                    msg = data.get("message", {})
+                    if msg.get("role") == "user" and title == "Untitled":
+                        for item in msg.get("content", []):
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                text = str(item.get("text", "")).strip()
+                                if text:
+                                    if "User prompt:" in text:
+                                        text = text.split("User prompt:", 1)[1].strip()
+                                    first = text.split("\n")[0]
+                                    title = (first[:57] + "...") if len(first) > 60 else first
+                                    break
+                    if title != "Untitled":
+                        break
+            for line in reversed(lines):
+                data = json.loads(line)
+                if data.get("type") == "message":
+                    ts = data.get("timestamp", "")
+                    if ts:
+                        from datetime import datetime
+                        try:
+                            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                            last_time = dt.strftime("%d.%m. %H:%M")
+                        except ValueError:
+                            pass
+                        break
+            return title, last_time
         except Exception:
-            return "Untitled"
+            return title, last_time
 
     async def _remember_current_session(self, make_active: bool = True) -> None:
         try:
