@@ -5,247 +5,201 @@
 <h1 align="center">pi.lot</h1>
 
 <p align="center">
-  A Telegram bridge for the <a href="https://github.com/earendil-works/pi/tree/main/packages/coding-agent">pi coding agent</a>.
+  Your personal AI assistant inside Telegram.
 </p>
 
 ---
 
-pi.lot runs the pi coding agent as a long-lived `pi --mode rpc` subprocess and exposes it through a private Telegram bot. Telegram is the interface; pi remains the agent runtime, session manager, model/provider layer, command system, and skill host.
+**pi.lot** connects the powerful [pi Coding Agent](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) to Telegram. Instead of working in a terminal, you simply chat with your bot — from anywhere, on any device. pi remains the same intelligent AI that writes code, researches, manages files, and handles complex tasks.
 
-The goal of this repo is a small self-contained Docker service that lets one authorized Telegram user talk to pi from anywhere, keep pi sessions persisted under a mounted workspace, and add agent-side capabilities through pi skills.
+## Contents
 
-## Table of Contents
-
-- [What pi.lot does](#what-pilot-does)
-- [How it works](#how-it-works)
+- [What does pi.lot do?](#what-does-pilot-do)
 - [Quick Start](#quick-start)
-- [Docker](#docker)
-- [Telegram commands](#telegram-commands)
+- [Important Settings](#important-settings)
+- [Bundled Skills](#bundled-skills)
+- [Adding Custom Skills](#adding-custom-skills)
+- [Telegram Commands](#telegram-commands)
 - [Sessions](#sessions)
-- [Skills](#skills)
-- [Extensions](#extensions)
-- [Cronjobs](#cronjobs)
-- [Configuration](#configuration)
-- [Repository layout](#repository-layout)
+- [Cronjobs — Reminders & Automation](#cronjobs)
+- [Acknowledgements](#acknowledgements)
 
 ---
 
-## What pi.lot does
+## What does pi.lot do?
 
-- Starts `pi --mode rpc` and talks to it over JSONL stdin/stdout.
-- Runs a Python Telegram bot using long polling.
-- Binds itself to the first Telegram user who messages the bot; all other users are rejected.
-- Persists authorization, behavior prompt, pi sessions, cronjobs, and skill data under `/workspace` when mounted.
-- Injects a configurable behavior prompt at the beginning of new sessions.
-- Streams pi thinking/status/final output into Telegram by editing the active response message.
-- Queues prompts while pi is busy and executes them FIFO.
-- Exposes a small pi extension tool that can send local files back to the authorized Telegram chat when the user asks for them.
-- Downloads files sent by the authorized Telegram user into `/workspace/data/files_received` and passes their paths to pi for analysis.
-- Intercepts pi.lot-specific slash commands and forwards unknown slash commands to pi, so `/login`, `/model`, `/skill:name`, prompt templates, and extension commands can still work.
-- Installs a set of self-contained pi skills into the Docker image.
+- **Chat with pi** — Ask questions, have code written, analyze files, or research topics. All via Telegram.
+- **Send & receive files** — Send files to the bot (e.g. logs, images, documents) for pi to analyze. Ask "send me the log file back" — pi can return local files via Telegram.
+- **Sessions** — pi remembers the context of your conversation. You can switch between different projects or start fresh anytime.
+- **Automation** — Create reminders or recurring tasks, e.g. "Every morning at 8 AM, summarize my emails".
+- **Skills extend pi** — Add extra capabilities like YouTube summaries, web search, Gmail access, or smart-home control.
 
-## How it works
-
-```text
-Telegram user
-    │
-    ▼
-python-telegram-bot long polling
-    │
-    ▼
-pi.lot Python app
-    │  ├─ auth + config in /workspace/data
-    │  ├─ FIFO prompt queue
-    │  ├─ prompt inbox watcher for scheduled jobs
-    │  └─ Telegram message formatting/updating
-    │
-    ▼
-pi --mode rpc subprocess
-    │
-    ▼
-pi sessions, providers, models, tools, slash commands, skills
-```
-
-A normal prompt flow is:
-
-1. The authorized user sends a Telegram message.
-2. pi.lot queues the prompt.
-3. If this is the first prompt of a new session, pi.lot prefixes the behavior prompt.
-4. pi receives the prompt through RPC.
-5. pi.lot updates one Telegram response message with thinking/status updates.
-6. When pi finishes, that message is replaced with the final answer.
+---
 
 ## Quick Start
 
+> **Prerequisite:** You need a [Telegram bot token](https://core.telegram.org/bots/tutorial#obtain-your-bot-token). Message [@BotFather](https://t.me/botfather) in Telegram to create one.
+
+### Option 1: Using `deploy.sh` (recommended)
+
 ```bash
-pip install -r requirements.txt
+# 1. Clone the repo
+git clone https://github.com/oliverruoff/pi.lot.git
+cd pi.lot
+
+# 2. Edit environment variables
 cp .env.example .env
-# edit .env: add TELEGRAM_BOT_TOKEN and provider API keys or pi auth config
-python -m pilot
-```
+# Open .env in an editor and fill in at least TELEGRAM_BOT_TOKEN
 
-You also need `pi` available on `PATH`. The Docker image installs the latest `@earendil-works/pi-coding-agent` automatically.
-
-## Docker
-
-Build and run locally:
-
-```bash
-docker build -t pi-lot .
-docker run --env-file .env -v "$PWD/workspace:/workspace" pi-lot
-```
-
-Or use the deployment script:
-
-```bash
-cp .env.example .env
-# edit .env
+# 3. Start
 ./deploy.sh
 ```
 
-`deploy.sh` updates/clones the repo, backs up `workspace`, rebuilds the image, replaces the old container, preserves timezone settings, mounts `workspace` to `/workspace`, and starts the container with a restart policy.
+The script builds the Docker image, starts the container, and makes sure your data is preserved.
 
-The Docker image includes Python, bash, cron, SSH client/server tooling, Node/npm, the latest pi package, and the bundled skills. It also writes a small pi `models.json` provider-header override for `kimi-coding` to avoid Kimi's misleading 429 response to the default Anthropic SDK User-Agent.
-
-## Telegram commands
-
-pi.lot includes a tiny pi extension tool, `send_telegram_file`. Bundled `.ts` files from `pi_extensions/` are installed as global pi extensions in the image, and pi.lot removes matching stale copies from `/workspace/.pi/extensions` on startup so persistent workspaces do not load duplicate tools. `send_telegram_file` lets the agent send a local file to the authorized Telegram chat, for example when you ask: "send me your local log file". Files you send to the bot are saved under `/workspace/data/files_received` and the saved path is included in the prompt to pi.
-
-pi.lot handles these commands itself:
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show pi.lot commands |
-| `/new` | Start a new pi session |
-| `/sessions` | List known sessions by numeric id |
-| `/session <id>` | Switch to a known session |
-| `/behavior` | Show the current behavior prompt |
-| `/behavior_change <text>` | Change the behavior prompt for future new sessions |
-| `/stop` | Abort the current pi run and clear queued prompts |
-
-Unknown slash commands are forwarded to pi. Use pi commands such as `/login`, `/model`, `/settings`, `/session`, `/tree`, `/compact`, or `/skill:name` as supported by the installed pi version.
-
-## Sessions
-
-pi.lot uses pi's native session handling. In this container, `PI_CODING_AGENT_SESSION_DIR` defaults to:
-
-```text
-/workspace/data/pi-sessions
-```
-
-Mount `/workspace` to persist sessions and pi.lot state across container rebuilds. Cronjob-created sessions are added to the session list but do not replace the currently active Telegram session.
-
-## Skills
-
-Bundled skills are copied into `/root/.pi/agent/skills` in the Docker image. User-created persistent skills should live under `/workspace/skills`; pi.lot always starts pi with `--skill /workspace/skills` so this non-standard directory is included in skill discovery. Each skill is self-contained and is invoked by pi when relevant.
-
-- **youtube-summarizer** — fetch YouTube transcripts for agent-side summarization.
-- **memory** — persist and retrieve assistant memories in markdown files under `/workspace/memory`.
-- **gmail-access** — search and read Gmail via IMAP using an app password.
-- **cronjobs** — create, manage, and run scheduled prompts backed by Linux cron.
-- **brave-search** — web and news search via the Brave Search API.
-- **home-assistant** — read/control Home Assistant entities, call services, and manage automations through the REST API.
-
-### Skill environment variables
-
-| Skill | Required environment variables | Optional environment variables |
-|-------|--------------------------------|--------------------------------|
-| `youtube-summarizer` | None | None |
-| `memory` | None | None |
-| `gmail-access` | `GMAIL_EMAIL`, `GMAIL_APP_PASSWORD` | `GMAIL_IMAP_HOST` (default `imap.gmail.com`), `GMAIL_IMAP_PORT` (default `993`) |
-| `cronjobs` | None | None |
-| `brave-search` | `BRAVE_SEARCH_API_KEY` | None |
-| `home-assistant` | `HOME_ASSISTANT_TOKEN` | `HOME_ASSISTANT_URL` (default `http://homeassistant.local:8123`) |
-
-## Extensions
-
-Bundled pi extensions live in the repository-level `pi_extensions/` folder. During Docker build they are copied into the image under:
-
-```text
-/root/.pi/agent/extensions
-```
-
-pi auto-discovers both global extensions (`~/.pi/agent/extensions`) and project-local extensions (`.pi/extensions`). pi.lot keeps bundled extensions global and removes matching stale copies from `/workspace/.pi/extensions` on startup so persistent workspaces do not load duplicate tools. To add another pi agent tool, add another `.ts` file to `pi_extensions/`, rebuild/redeploy the container, and pi will load it on startup.
-
-## Cronjobs
-
-The cronjobs skill lets you ask pi naturally to create, list, edit, delete, enable/disable, or run scheduled prompts, for example:
-
-```text
-Create a cronjob every weekday at 8:00 that summarizes my todos.
-List my cronjobs.
-Run the weekly report cronjob now.
-```
-
-Cronjobs are stored in:
-
-```text
-/workspace/data/cronjobs.json
-```
-
-Linux crontab is generated from that file on container startup and after cronjob changes. When a scheduled job fires, the skill writes a prompt request into:
-
-```text
-/workspace/data/prompt_inbox
-```
-
-pi.lot watches that inbox, starts a fresh pi session for the scheduled prompt, sends progress/final output to Telegram, and then restores the previously active session.
-
-Manual inspection inside the container:
+### Option 2: Manual Docker
 
 ```bash
-cd /root/.pi/agent/skills/cronjobs
-python scripts/cron_cli.py list
-python scripts/cron_cli.py sync
+# 1. Clone repo and edit .env (see above)
+git clone https://github.com/oliverruoff/pi.lot.git
+cd pi.lot
+cp .env.example .env
+# Fill in TELEGRAM_BOT_TOKEN and API keys
+
+# 2. Build and start
+docker build -t pi-lot .
+docker run -d \
+  --name pi-lot \
+  --env-file .env \
+  -v "$PWD/workspace:/workspace" \
+  --restart unless-stopped \
+  pi-lot
 ```
 
-## Configuration
+Your bot is now live. Message it on Telegram — you are automatically the first and only authorized user.
 
-Required:
+### Important: Persist Your Data
+
+Make sure to mount the `/workspace` directory as a volume (see examples above). It contains:
+
+- Your pi sessions (conversation history)
+- Your personal skills
+- Saved memories
+- Cronjobs and received files
+
+Without this volume, all data is lost when the container restarts.
+
+---
+
+## Important Settings
+
+All settings are configured via environment variables — either in the `.env` file or passed directly at Docker startup.
+
+### Required (nothing works without these)
 
 | Variable | Description |
 |----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather |
+| `TELEGRAM_BOT_TOKEN` | Your bot token from @BotFather |
 
-Common optional values:
+### Model & AI Provider (at least one required)
+
+pi needs access to an AI model to respond. You can use any model supported by the pi Coding Agent. Check the [pi documentation](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) from Earendil Works for the list of supported providers and their required environment variables.
+
+> **Tip:** You can also set `PI_ARGS=--model <provider>/<model>` to choose a specific model. If omitted, pi picks a sensible default.
+
+### Optional Settings
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PILOT_WORKDIR` | `/workspace` | Working directory passed to pi |
-| `PILOT_DATA_DIR` | `/workspace/data` | Persistent pi.lot state directory |
-| `PILOT_BEHAVIOR_PROMPT` | built-in default | Behavior prompt injected into new sessions |
-| `PILOT_BEHAVIOR_PROMPT_PATH` | unset | Read behavior prompt from a file |
-| `PI_COMMAND` | `pi` | pi executable |
-| `PI_ARGS` | unset | Extra pi CLI args; pi.lot always adds `--mode rpc --skill /workspace/skills` |
-| `TELEGRAM_PARSE_MODE` | `MarkdownV2` | Telegram parse mode; set differently to disable MarkdownV2 formatting |
-| `LOG_LEVEL` | `INFO` | Python log level |
+| `PILOT_BEHAVIOR_PROMPT` | *built-in default* | How should pi behave? E.g. "You are a friendly helper who answers briefly." |
+| `LOG_LEVEL` | `INFO` | Log detail level (`DEBUG`, `INFO`, `WARNING`) |
+| `GITHUB_PAT` | — | GitHub Personal Access Token, if pi should create pull requests or access repos |
 
-Provider/model configuration is handled by pi. Pass provider secrets and model choices through environment variables, for example:
+---
 
-```bash
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
-PI_ARGS=--model anthropic/claude-sonnet-4-20250514
-```
+## Bundled Skills
 
-Additional integration-specific values:
+Skills are extensions that give pi additional capabilities. The following skills are included in the image by default:
 
-| Variable | Used by |
-|----------|---------|
-| `GITHUB_PAT` | pi/GitHub workflows |
+| Skill | What it does | Required Settings |
+|-------|-------------|-------------------|
+| **memory** | Saves memories and information for you in `/workspace/memory` | None |
+| **youtube-summarizer** | Summarizes YouTube videos (if captions are available) | None |
+| **brave-search** | Searches the web and news | `BRAVE_SEARCH_API_KEY` |
+| **gmail-access** | Reads and searches your Gmail emails | `GMAIL_EMAIL`, `GMAIL_APP_PASSWORD` |
+| **home-assistant** | Controls your smart home (devices, automations) | `HOME_ASSISTANT_TOKEN` (optional `HOME_ASSISTANT_URL`) |
+| **cronjobs** | Creates scheduled tasks and reminders | None |
+| **browser-control** | Controls a browser (open pages, screenshots, clicks) | None |
 
-## Repository layout
+> **How to activate a skill:** Just ask pi — e.g. "Search the web for..." or "Read my unread emails". pi automatically detects which skill fits and uses it. If a skill needs an API key and it is missing, pi will tell you.
 
-```text
-pilot/                 Python Telegram bridge application
-pilot/pi_rpc.py        JSON-RPC process wrapper for pi --mode rpc
-pilot/config.py        environment + persisted config loading
-pilot/telegram_format.py
-                       Telegram-safe formatting/splitting
-pilot/skills/          bundled self-contained pi skills
-pi_extensions/         bundled pi TypeScript extensions installed globally in the image
-markdowns/             implementation/specification notes
-workspace/             local persistent workspace mount target
-Dockerfile             self-contained runtime image
-deploy.sh              update/build/replace-container deployment script
-```
+---
+
+## Adding Custom Skills
+
+There are two ways to extend pi with your own capabilities:
+
+### 1. Let pi create the skill for you (recommended)
+
+Simply tell pi what capability you need — e.g.:
+
+> "Create a skill that fetches Apple's stock price for me every day."
+
+pi handles the rest: it writes the skill files, places them in the correct directory, and activates them. The skill is saved under **`/workspace/skills`** and persists across container restarts (as long as you have mounted `/workspace` as a volume).
+
+### 2. Create a skill manually
+
+If you prefer to do it yourself:
+
+1. Create a folder under **`/workspace/skills/my-skill/`**
+2. Add a **`SKILL.md`** inside it. Describe what the skill does and how it works.
+3. Optional: Add scripts, configuration files, or templates.
+4. Restart the container or tell pi: *`/reload`* — pi will discover the new skill automatically.
+
+**Important:** Always use `/workspace/skills`, not `/root/.pi/agent/skills`. Only `/workspace` survives a container restart.
+
+---
+
+## Telegram Commands
+
+pi.lot understands a few direct commands. Just type them in the chat:
+
+| Command | Function |
+|---------|----------|
+| `/new` | Starts a new conversation (new session) |
+| `/sessions` | Shows all saved sessions |
+| `/session <number>` | Switches to a specific session |
+| `/behavior` | Shows the current behavior prompt |
+| `/behavior_change <text>` | Changes how pi behaves in future sessions |
+| `/stop` | Aborts the current response and clears the queue |
+| `/help` | Shows this help |
+
+All other commands (e.g. `/login`, `/model`, `/settings`, `/skill:name`) are forwarded directly to pi.
+
+---
+
+## Sessions
+
+A session is a single conversation with pi. You can run multiple sessions in parallel — for example one for a Python project, one for research, and one for personal organization.
+
+- Sessions are stored under **`/workspace/data/pi-sessions`**.
+- Cronjobs automatically start their own session and report the result to you.
+- Afterwards, your previously active session is restored.
+
+---
+
+## Cronjobs
+
+Want pi to remind you regularly or handle recurring tasks? Just ask:
+
+> "Create a cronjob: every weekday at 8 AM, summarize my todo list."
+> "Run the weekly report now."
+> "Show my cronjobs."
+
+pi creates the task, saves it in **`/workspace/data/cronjobs.json`**, and handles execution. No manual setup needed.
+
+---
+
+## Acknowledgements
+
+pi.lot is built on top of the excellent [pi Coding Agent](https://github.com/earendil-works/pi/tree/main/packages/coding-agent). A huge **thank you** to **Earendil Works** for developing this impressive AI coding harness!
