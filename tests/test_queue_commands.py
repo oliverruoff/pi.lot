@@ -1,0 +1,163 @@
+"""Verify /new and /session are queued and processed sequentially."""
+from __future__ import annotations
+
+import asyncio
+import tempfile
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from pilot.__main__ import PilotApp, WorkItem
+from pilot.config import Config
+
+
+@pytest.fixture
+def cfg():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield Config(
+            telegram_bot_token="dummy",
+            workdir=str(tmpdir),
+            behavior_prompt="test",
+            log_level="INFO",
+            pi_command="pi",
+            pi_args=["--mode", "rpc"],
+            telegram_parse_mode="MarkdownV2",
+            data_dir=str(tmpdir),
+        )
+
+
+@pytest.fixture
+def app(cfg):
+    with patch("pilot.__main__.PiRPC"):
+        app = PilotApp(cfg)
+        # Mock pi RPC
+        app.pi = MagicMock()
+        app.pi.new_session = AsyncMock()
+        app.pi.switch_session = AsyncMock()
+        app.pi.get_state = AsyncMock(
+            return_value={"sessionFile": str(Path(cfg.data_dir) / "test.jsonl")}
+        )
+        app.pi.prompt_and_wait = AsyncMock()
+
+        # Mock Telegram bot
+        app.app = MagicMock()
+        app.app.bot = MagicMock()
+        app.app.bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+        app.app.bot.send_chat_action = AsyncMock()
+        app.app.bot.edit_message_text = AsyncMock()
+        app.app.bot.delete_message = AsyncMock()
+
+        app.main_chat_id = 12345
+        session_path = str(Path(cfg.data_dir) / "session1.jsonl")
+        app.sessions[1] = session_path
+        app.active_session_no = 1
+        # Ensure mocked get_state returns the same session file so
+        # _remember_current_session does not create a duplicate entry.
+        app.pi.get_state = AsyncMock(return_value={"sessionFile": session_path})
+        return app
+
+
+async def _drain_queue(app: PilotApp, worker_task: asyncio.Task, timeout: float = 5.0):
+    """Poll until the queue is empty and worker is idle, then cancel the worker."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if app.queue.empty() and not app.busy:
+            break
+        await asyncio.sleep(0.05)
+    worker_task.cancel()
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_new_is_queued_after_prompt(app):
+    """A /new command enqueued while busy runs AFTER the preceding prompt."""
+    call_order = []
+
+    async def track_prompt(*args, **kwargs):
+        call_order.append("prompt")
+
+    async def track_new(*args, **kwargs):
+        call_order.append("new")
+
+    app.pi.prompt_and_wait = AsyncMock(side_effect=track_prompt)
+    app.pi.new_session = AsyncMock(side_effect=track_new)
+
+    worker = asyncio.create_task(app.worker())
+    await asyncio.sleep(0.05)  # let worker reach queue.get()
+
+    await app.queue.put(WorkItem("First prompt"))
+    await app.queue.put(WorkItem("", command="/new"))
+    await app.queue.put(WorkItem("Second prompt"))
+
+    await _drain_queue(app, worker)
+
+    assert app.queue.empty()
+    assert call_order == ["prompt", "new", "prompt"], f"Calls were: {call_order}"
+    # After /new ran, inject_behavior_next was set to True, but the following
+    # normal prompt resets it to False again – that is expected.
+    assert app.inject_behavior_next is False
+
+
+@pytest.mark.asyncio
+async def test_session_switch_is_queued_after_prompt(app):
+    """A /session command enqueued while busy runs AFTER the preceding prompt."""
+    call_order = []
+
+    async def track_prompt(*args, **kwargs):
+        call_order.append("prompt")
+
+    async def track_switch(*args, **kwargs):
+        call_order.append("switch")
+
+    app.pi.prompt_and_wait = AsyncMock(side_effect=track_prompt)
+    app.pi.switch_session = AsyncMock(side_effect=track_switch)
+
+    worker = asyncio.create_task(app.worker())
+    await asyncio.sleep(0.05)
+
+    await app.queue.put(WorkItem("First prompt"))
+    await app.queue.put(WorkItem("", command="/session", session_no=1))
+    await app.queue.put(WorkItem("Second prompt"))
+
+    await _drain_queue(app, worker)
+
+    assert app.queue.empty()
+    assert call_order == ["prompt", "switch", "prompt"], f"Calls were: {call_order}"
+    assert app.active_session_no == 1
+    assert app.inject_behavior_next is False
+
+
+@pytest.mark.asyncio
+async def test_stop_clears_queued_commands(app):
+    """/stop empties the queue even when it contains /new or /session commands."""
+    # Make prompt_and_wait slow so the worker stays busy while we clear.
+    async def _slow(*a, **k):
+        await asyncio.sleep(10)
+    app.pi.prompt_and_wait = AsyncMock(side_effect=_slow)
+
+    worker = asyncio.create_task(app.worker())
+    await asyncio.sleep(0.05)
+
+    await app.queue.put(WorkItem("Prompt"))
+    await app.queue.put(WorkItem("", command="/new"))
+    await app.queue.put(WorkItem("", command="/session", session_no=1))
+
+    # Wait until the worker grabbed the first item and is blocked in prompt_and_wait.
+    for _ in range(20):
+        if app.busy:
+            break
+        await asyncio.sleep(0.05)
+
+    cleared = app._clear_queue()
+    worker.cancel()
+    try:
+        await worker
+    except asyncio.CancelledError:
+        pass
+
+    assert cleared == 2
+    assert app.queue.empty()
