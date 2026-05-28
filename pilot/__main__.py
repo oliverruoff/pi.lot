@@ -45,6 +45,8 @@ class ReplyHandle:
 class WorkItem:
     prompt: str
     cronjob_id: str | None = None
+    command: str | None = None
+    session_no: int | None = None
 
 
 class PilotApp:
@@ -144,10 +146,12 @@ class PilotApp:
         if cmd == "/help":
             await context.bot.send_message(chat_id, HELP)
         elif cmd == "/new":
-            await self.pi.new_session()
-            await self._remember_current_session()
-            self.inject_behavior_next = True
-            await context.bot.send_message(chat_id, "Started a new pi session.")
+            was_busy = self.busy
+            await self.queue.put(WorkItem("", command="/new"))
+            await self._send_typing_action()
+            pending = self.queue.qsize()
+            if was_busy and pending:
+                await context.bot.send_message(chat_id, f"Queued ({pending} pending).")
         elif cmd == "/sessions":
             await self._remember_current_session()
             lines = ["Known sessions:"]
@@ -164,14 +168,16 @@ class PilotApp:
                     lines.append("")
             await context.bot.send_message(chat_id, "\n".join(lines))
         elif cmd == "/session":
-            if not arg.strip().isdigit() or int(arg.strip()) not in self.sessions:
+            no_str = arg.strip()
+            if not no_str.isdigit() or int(no_str) not in self.sessions:
                 await context.bot.send_message(chat_id, "Usage: /session <id>")
             else:
-                no = int(arg.strip())
-                await self.pi.switch_session(self.sessions[no])
-                self.active_session_no = no
-                self.inject_behavior_next = False
-                await context.bot.send_message(chat_id, f"Switched to session {no}.")
+                was_busy = self.busy
+                await self.queue.put(WorkItem("", command="/session", session_no=int(no_str)))
+                await self._send_typing_action()
+                pending = self.queue.qsize()
+                if was_busy and pending:
+                    await context.bot.send_message(chat_id, f"Queued ({pending} pending).")
         elif cmd == "/behavior":
             await context.bot.send_message(chat_id, self.behavior_prompt)
         elif cmd == "/behavior_change":
@@ -244,27 +250,41 @@ class PilotApp:
             previous_active = self.active_session_no
             restored_active = False
             try:
-                prompt = item.prompt
-                if item.cronjob_id:
+                if item.command == "/new":
                     await self.pi.new_session()
-                    await self._remember_current_session(make_active=False)
-                    prompt = f"{self.behavior_prompt}\n\nUser prompt:\n{prompt}"
-                elif self.inject_behavior_next:
-                    prompt = f"{self.behavior_prompt}\n\nUser prompt:\n{prompt}"
+                    await self._remember_current_session()
+                    self.inject_behavior_next = True
+                    if self.main_chat_id and self.app:
+                        await self.app.bot.send_message(self.main_chat_id, "Started a new pi session.")
+                elif item.command == "/session":
+                    no = item.session_no
+                    await self.pi.switch_session(self.sessions[no])
+                    self.active_session_no = no
                     self.inject_behavior_next = False
-                if self.main_chat_id and self.app:
-                    msg = await self.app.bot.send_message(self.main_chat_id, "Thinking…")
-                    self.current_reply = ReplyHandle(self.main_chat_id, msg.message_id)
-                await self.pi.prompt_and_wait(prompt, streaming_behavior="followUp")
-                await self._remember_current_session(make_active=not bool(item.cronjob_id))
-                final = self.current_text.strip() or self.current_status.strip() or "No assistant output was returned."
-                await self.send_final_reply(final)
-                if item.cronjob_id:
-                    self._mark_prompt_status(item.cronjob_id, "success")
-                    if previous_active and previous_active in self.sessions:
-                        await self.pi.switch_session(self.sessions[previous_active])
-                        self.active_session_no = previous_active
-                        restored_active = True
+                    if self.main_chat_id and self.app:
+                        await self.app.bot.send_message(self.main_chat_id, f"Switched to session {no}.")
+                else:
+                    prompt = item.prompt
+                    if item.cronjob_id:
+                        await self.pi.new_session()
+                        await self._remember_current_session(make_active=False)
+                        prompt = f"{self.behavior_prompt}\n\nUser prompt:\n{prompt}"
+                    elif self.inject_behavior_next:
+                        prompt = f"{self.behavior_prompt}\n\nUser prompt:\n{prompt}"
+                        self.inject_behavior_next = False
+                    if self.main_chat_id and self.app:
+                        msg = await self.app.bot.send_message(self.main_chat_id, "Thinking…")
+                        self.current_reply = ReplyHandle(self.main_chat_id, msg.message_id)
+                    await self.pi.prompt_and_wait(prompt, streaming_behavior="followUp")
+                    await self._remember_current_session(make_active=not bool(item.cronjob_id))
+                    final = self.current_text.strip() or self.current_status.strip() or "No assistant output was returned."
+                    await self.send_final_reply(final)
+                    if item.cronjob_id:
+                        self._mark_prompt_status(item.cronjob_id, "success")
+                        if previous_active and previous_active in self.sessions:
+                            await self.pi.switch_session(self.sessions[previous_active])
+                            self.active_session_no = previous_active
+                            restored_active = True
             except Exception as e:
                 log.exception("prompt failed")
                 if item.cronjob_id:
