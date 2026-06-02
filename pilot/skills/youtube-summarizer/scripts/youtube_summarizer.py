@@ -23,6 +23,13 @@ except Exception as exc:  # pragma: no cover - dependency may be missing
 else:
     YOUTUBE_TRANSCRIPT_IMPORT_ERROR = ""
 
+try:
+    from transcribe_fallback import transcribe_video
+    TRANSCRIBE_FALLBACK_AVAILABLE = True
+except Exception:  # pragma: no cover
+    transcribe_video = None  # type: ignore[assignment]
+    TRANSCRIBE_FALLBACK_AVAILABLE = False
+
 VIDEO_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{11}$")
 DETAIL_LEVELS = {"brief", "standard", "detailed"}
 DEFAULT_BUDGETS = {"brief": 12_000, "standard": 30_000, "detailed": 80_000}
@@ -49,6 +56,22 @@ def main() -> int:
         default=None,
         help="Maximum transcript characters to return; defaults by detail level",
     )
+    parser.add_argument(
+        "--transcribe-fallback",
+        action="store_true",
+        help="If no transcript is available, download audio and transcribe locally with Whisper",
+    )
+    parser.add_argument(
+        "--whisper-model",
+        default="base",
+        choices=["tiny", "base", "small", "medium", "large-v3"],
+        help="Whisper model size when using --transcribe-fallback (default: base)",
+    )
+    parser.add_argument(
+        "--whisper-language",
+        default=None,
+        help="Force language code for Whisper transcription, e.g. de or en",
+    )
     args = parser.parse_args()
 
     try:
@@ -57,6 +80,9 @@ def main() -> int:
             detail=args.detail,
             languages=args.languages,
             max_chars=args.max_chars,
+            transcribe_fallback=args.transcribe_fallback,
+            whisper_model=args.whisper_model,
+            whisper_language=args.whisper_language,
         )
     except Exception as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
@@ -66,7 +92,16 @@ def main() -> int:
     return 0
 
 
-def build_payload(*, video: str, detail: str, languages: list[str], max_chars: int | None) -> dict[str, Any]:
+def build_payload(
+    *,
+    video: str,
+    detail: str,
+    languages: list[str],
+    max_chars: int | None,
+    transcribe_fallback: bool = False,
+    whisper_model: str = "base",
+    whisper_language: str | None = None,
+) -> dict[str, Any]:
     if YouTubeTranscriptApi is None:
         raise RuntimeError(
             "Missing dependency: youtube-transcript-api. Install with: "
@@ -80,7 +115,13 @@ def build_payload(*, video: str, detail: str, languages: list[str], max_chars: i
 
     detail = detail if detail in DETAIL_LEVELS else "standard"
     language_codes = normalize_language_codes(languages)
-    transcript = fetch_transcript(video_id, language_codes)
+    transcript = fetch_transcript(
+        video_id,
+        language_codes,
+        transcribe_fallback=transcribe_fallback,
+        whisper_model=whisper_model,
+        whisper_language=whisper_language,
+    )
 
     budget = max_chars if max_chars and max_chars > 0 else DEFAULT_BUDGETS[detail]
     transcript_text = truncate_middle(str(transcript["full_text"]), budget)
@@ -109,7 +150,14 @@ def build_payload(*, video: str, detail: str, languages: list[str], max_chars: i
     }
 
 
-def fetch_transcript(video_id: str, languages: list[str]) -> dict[str, Any]:
+def fetch_transcript(
+    video_id: str,
+    languages: list[str],
+    *,
+    transcribe_fallback: bool = False,
+    whisper_model: str = "base",
+    whisper_language: str | None = None,
+) -> dict[str, Any]:
     api = YouTubeTranscriptApi()
 
     try:
@@ -124,17 +172,26 @@ def fetch_transcript(video_id: str, languages: list[str]) -> dict[str, Any]:
             "language_code": safe_str(getattr(fetched, "language_code", "")),
             "is_generated": bool(getattr(fetched, "is_generated", False)),
             "character_count": len(full_text),
+            "source": "youtube_transcript_api",
         }
     except AttributeError:
         # Compatibility fallback for older youtube-transcript-api versions.
         pass
     except Exception as exc:
-        raise transcript_error(exc) from exc
+        if transcribe_fallback:
+            return _try_transcribe_fallback(
+                video_id, exc, whisper_model=whisper_model, whisper_language=whisper_language
+            )
+        raise transcript_error(exc, fallback_available=transcribe_fallback) from exc
 
     try:
         raw_entries = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
     except Exception as exc:
-        raise transcript_error(exc) from exc
+        if transcribe_fallback:
+            return _try_transcribe_fallback(
+                video_id, exc, whisper_model=whisper_model, whisper_language=whisper_language
+            )
+        raise transcript_error(exc, fallback_available=transcribe_fallback) from exc
 
     snippets = normalize_raw_entries(raw_entries)
     full_text = "\n".join(item["text"] for item in snippets if item["text"])
@@ -147,16 +204,55 @@ def fetch_transcript(video_id: str, languages: list[str]) -> dict[str, Any]:
         "language_code": "",
         "is_generated": False,
         "character_count": len(full_text),
+        "source": "youtube_transcript_api",
     }
 
 
-def transcript_error(exc: Exception) -> RuntimeError:
+def _try_transcribe_fallback(
+    video_id: str,
+    original_exc: Exception,
+    *,
+    whisper_model: str = "base",
+    whisper_language: str | None = None,
+) -> dict[str, Any]:
+    if not TRANSCRIBE_FALLBACK_AVAILABLE:
+        raise transcript_error(
+            original_exc,
+            fallback_available=False,
+            fallback_reason="transcribe_fallback dependencies not installed",
+        ) from original_exc
+    try:
+        return transcribe_video(
+            video_id,
+            model_size=whisper_model,
+            language=whisper_language,
+        )
+    except Exception as fallback_exc:
+        raise transcript_error(
+            original_exc,
+            fallback_available=True,
+            fallback_reason=str(fallback_exc),
+        ) from fallback_exc
+
+
+def transcript_error(
+    exc: Exception,
+    *,
+    fallback_available: bool = False,
+    fallback_reason: str = "",
+) -> RuntimeError:
     name = exc.__class__.__name__
+    base_msg = ""
     if name in {"TranscriptsDisabled", "NoTranscriptFound", "VideoUnavailable"}:
-        return RuntimeError(f"No usable transcript for this video ({name}).")
-    if name in {"RequestBlocked", "IpBlocked"}:
-        return RuntimeError("YouTube blocked transcript requests from this environment.")
-    return RuntimeError(f"Failed to fetch YouTube transcript ({name}): {exc}")
+        base_msg = f"No usable transcript for this video ({name})."
+    elif name in {"RequestBlocked", "IpBlocked"}:
+        base_msg = "YouTube blocked transcript requests from this environment."
+    else:
+        base_msg = f"Failed to fetch YouTube transcript ({name}): {exc}"
+
+    if fallback_available:
+        base_msg += f" Local transcription fallback also failed: {fallback_reason}"
+    return RuntimeError(base_msg)
 
 
 def extract_video_id(value: str) -> str:
