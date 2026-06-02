@@ -3,10 +3,11 @@ from __future__ import annotations
 import re
 
 MAX_MESSAGE_LEN = 4096
+
 # Telegram MarkdownV2 reserved characters.
 _MD2_RESERVED = set(r"_*[]()~`>#+-=|{}.!\\")
 
-
+# Regex patterns for Markdown parsing.
 _CODE_SPAN_RE = re.compile(r"`([^`\n]+)`")
 _BOLD_RE = re.compile(r"(\*\*|__)(.+?)\1")
 _ITALIC_RE = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)|(?<!_)_([^_\n]+)_(?!_)")
@@ -39,9 +40,9 @@ def _strip_simple_markdown(text: str) -> str:
 def _inline_markdown_to_markdown_v2(text: str) -> str:
     """Convert common Markdown inline syntax to Telegram MarkdownV2.
 
-    Telegram does not understand normal Markdown. If we escaped the raw text, users
-    would see literal markers such as **bold**. Instead, protect the MarkdownV2
-    syntax we intentionally emit and escape everything else.
+    Telegram does not understand normal Markdown. If we escaped the raw text,
+    users would see literal markers such as **bold**. Instead, protect the
+    MarkdownV2 syntax we intentionally emit and escape everything else.
     """
     protected: dict[str, str] = {}
 
@@ -76,6 +77,7 @@ def _inline_markdown_to_markdown_v2(text: str) -> str:
     text = _ITALIC_RE.sub(italic_repl, text)
 
     text = escape_markdown_v2(text)
+
     # Protected replacements may contain other protected markers when Markdown is
     # nested, e.g. **`/reload`**. Restore until no markers remain.
     for _ in range(len(protected) + 1):
@@ -86,6 +88,7 @@ def _inline_markdown_to_markdown_v2(text: str) -> str:
                 changed = True
         if not changed:
             break
+
     return text
 
 
@@ -99,7 +102,9 @@ def _parse_table_row(line: str) -> list[str]:
 
 
 def _is_table_separator(cells: list[str]) -> bool:
-    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells)
+    if not cells:
+        return False
+    return all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells)
 
 
 def _render_table_as_cards(table_lines: list[str]) -> list[str] | None:
@@ -118,12 +123,16 @@ def _render_table_as_cards(table_lines: list[str]) -> list[str] | None:
         if len(row) < 2:
             continue
         normalized.append((row + [""] * width)[:width])
+
     if not normalized:
         return None
 
     rendered: list[str] = []
+
     if width == 2:
-        rendered.append(f"{_inline_markdown_to_markdown_v2(headers[0])} / {_inline_markdown_to_markdown_v2(headers[1])}")
+        rendered.append(
+            f"{_inline_markdown_to_markdown_v2(headers[0])} / {_inline_markdown_to_markdown_v2(headers[1])}"
+        )
         rendered.append("")
         for key, value in normalized:
             rendered.append(f"\\- {_inline_markdown_to_markdown_v2(key)}: {_inline_markdown_to_markdown_v2(value)}")
@@ -138,8 +147,10 @@ def _render_table_as_cards(table_lines: list[str]) -> list[str] | None:
             if value:
                 rendered.append(f"\\- {_inline_markdown_to_markdown_v2(header)}: {_inline_markdown_to_markdown_v2(value)}")
         rendered.append("")
+
     if rendered[-1] == "":
         rendered.pop()
+
     return rendered
 
 
@@ -155,14 +166,15 @@ def _flush_table(table_lines: list[str], lines: list[str]) -> None:
         for tl in table_lines:
             lines.append(_escape_code_markdown_v2(tl))
         lines.append("```")
+
     table_lines.clear()
 
 
 def markdown_to_telegram_markdown_v2(text: str) -> str:
     """Best-effort conversion from common Markdown to Telegram MarkdownV2."""
     lines: list[str] = []
-    in_fence = False
     table_lines: list[str] = []
+    in_fence = False
 
     for raw_line in text.splitlines():
         if _FENCE_RE.match(raw_line):
@@ -216,16 +228,20 @@ def markdown_to_telegram_markdown_v2(text: str) -> str:
         lines.append(_inline_markdown_to_markdown_v2(raw_line))
 
     _flush_table(table_lines, lines)
+
     if in_fence:
         lines.append("```")
+
     return "\n".join(lines)
 
 
 def chunks(text: str, limit: int = MAX_MESSAGE_LEN) -> list[str]:
     if not text:
         return [""]
+
     out: list[str] = []
     remaining = text
+
     while len(remaining) > limit:
         cut = remaining.rfind("\n", 0, limit)
         if cut < limit // 2:
@@ -234,6 +250,7 @@ def chunks(text: str, limit: int = MAX_MESSAGE_LEN) -> list[str]:
             cut = limit
         out.append(remaining[:cut])
         remaining = remaining[cut:].lstrip("\n ")
+
     out.append(remaining)
     return out
 
