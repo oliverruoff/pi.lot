@@ -6,6 +6,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,11 @@ from .telegram_format import format_for_telegram
 
 log = logging.getLogger(__name__)
 
-HELP = """pi.lot commands:
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+HELP_TEXT = """pi.lot commands:
 /help - Show slash-commands
 /new - New pi session
 /sessions - List known sessions
@@ -31,6 +36,25 @@ HELP = """pi.lot commands:
 
 Unknown slash commands are forwarded to pi (for example /login, /model, /skill:name)."""
 
+# Seconds between typing indicator updates.
+_TYPING_INTERVAL = 4.0
+
+# Minimum seconds between Telegram message edits.
+_MIN_UPDATE_INTERVAL = 1.0
+
+# How long to wait for pi abort/responsiveness check before restart.
+_ABORT_TIMEOUT = 2.0
+
+# Number of session entries to show in /sessions.
+_MAX_SESSION_LIST = 20
+
+# Max length for cronjob status strings.
+_MAX_STATUS_LEN = 1000
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
 
 @dataclass
 class ReplyHandle:
@@ -49,81 +73,112 @@ class WorkItem:
     session_no: int | None = None
 
 
+# ---------------------------------------------------------------------------
+# Main application
+# ---------------------------------------------------------------------------
+
 class PilotApp:
-    def __init__(self, cfg: Config):
+    """Telegram bot that bridges a single authorized user to the pi coding agent."""
+
+    def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self.main_user_id: int | None = cfg.main_user_id
         self.main_chat_id: int | None = cfg.main_chat_id
+
         self.pi = PiRPC(cfg.pi_command, cfg.pi_args, cfg.workdir, self.on_pi_event)
         self.app: Application | None = None
+
         self.queue: asyncio.Queue[WorkItem] = asyncio.Queue()
         self.busy = False
+
         self.current_reply: ReplyHandle | None = None
         self.current_text = ""
         self.current_thinking = ""
         self.current_status = ""
+
         self.behavior_prompt = cfg.behavior_prompt
         self.inject_behavior_next = True
+
         self.sessions: dict[int, str] = {}
         self.active_session_no: int | None = None
         self.pending_ui: dict[str, Any] | None = None
-        self.auth_file = Path(cfg.data_dir) / "auth.json"
-        self.prompt_inbox_dir = Path(cfg.data_dir) / "prompt_inbox"
-        self.telegram_file_outbox_dir = Path(cfg.data_dir) / "telegram_file_outbox"
-        self.files_received_dir = Path(cfg.data_dir) / "files_received"
+
+        # Directory / file paths
+        data_dir = Path(cfg.data_dir)
+        self.auth_file = data_dir / "auth.json"
+        self.prompt_inbox_dir = data_dir / "prompt_inbox"
+        self.telegram_file_outbox_dir = data_dir / "telegram_file_outbox"
+        self.files_received_dir = data_dir / "files_received"
+
+    # ------------------------------------------------------------------
+    # Startup
+    # ------------------------------------------------------------------
 
     async def run(self) -> None:
         self._load_auth()
         self._load_sessions_at_startup()
         os.environ["PILOT_TELEGRAM_FILE_OUTBOX"] = str(self.telegram_file_outbox_dir)
+
         await self.pi.start()
         await self._remember_current_session()
-        # Process Telegram updates concurrently so one stuck command handler cannot
-        # make /stop (or any later message) unreachable.
-        self.app = ApplicationBuilder().token(self.cfg.telegram_bot_token).concurrent_updates(True).build()
+
+        # Process Telegram updates concurrently so one stuck command handler
+        # cannot make /stop (or any later message) unreachable.
+        self.app = (
+            ApplicationBuilder()
+            .token(self.cfg.telegram_bot_token)
+            .concurrent_updates(True)
+            .build()
+        )
         self.app.add_handler(MessageHandler(filters.ALL, self.on_update))
+
         asyncio.create_task(self.worker())
         asyncio.create_task(self.prompt_inbox_watcher())
         asyncio.create_task(self.telegram_file_outbox_watcher())
+
         await self.app.initialize()
         await self.app.start()
         await self.app.updater.start_polling()  # type: ignore[union-attr]
+
         log.info("pi.lot started; waiting for first Telegram user")
         await asyncio.Event().wait()
+
+    # ------------------------------------------------------------------
+    # Telegram update handler
+    # ------------------------------------------------------------------
 
     async def on_update(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_user or not update.effective_chat:
             return
+
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
+
         if self.main_user_id is None:
             self.main_user_id = user_id
             self.main_chat_id = chat_id
             self._save_auth()
             await context.bot.send_message(chat_id, "pi.lot started. You are now the authorized user.")
-        elif user_id != self.main_user_id:
+            return
+
+        if user_id != self.main_user_id:
             await context.bot.send_message(chat_id, "This pi.lot instance is already bound to another user.")
             return
 
         msg = update.effective_message
         text = (msg.text or msg.caption) if msg else None
+
+        # Handle file downloads first.
         received_file = await self._download_incoming_file(msg, context) if msg else None
         if received_file:
-            prompt_text = msg.caption or "User sent a Telegram file."
-            was_busy = self.busy
-            await self.queue.put(WorkItem(f"{prompt_text}\n\nReceived Telegram file saved at: {received_file}"))
-            await self._send_typing_action()
-            await context.bot.send_message(chat_id, f"Downloaded file to {received_file}")
-            pending = self.queue.qsize()
-            if was_busy and pending:
-                await context.bot.send_message(chat_id, f"Queued ({pending} pending).")
+            await self._enqueue_file_prompt(msg, context, received_file)
             return
+
         if not text:
             await context.bot.send_message(chat_id, "Only text messages and file attachments are supported.")
             return
 
-        # Rescue commands must preempt extension UI prompts. Otherwise /stop can be
-        # swallowed as a UI answer while pi is waiting or wedged.
+        # Rescue commands must preempt extension UI prompts.
         if text.startswith("/") and await self._handle_pilot_command(text, context):
             return
 
@@ -131,87 +186,150 @@ class PilotApp:
             await self._answer_pending_ui(text, context)
             return
 
+        await self._enqueue_text_prompt(text, context)
+
+    # ------------------------------------------------------------------
+    # Enqueuing helpers
+    # ------------------------------------------------------------------
+
+    async def _enqueue_file_prompt(self, msg: Any, context: ContextTypes.DEFAULT_TYPE, received_file: str) -> None:
+        prompt_text = msg.caption or "User sent a Telegram file."
+        was_busy = self.busy
+        await self.queue.put(
+            WorkItem(f"{prompt_text}\n\nReceived Telegram file saved at: {received_file}")
+        )
+        await self._send_typing_action()
+        await context.bot.send_message(self.main_chat_id, f"Downloaded file to {received_file}")
+        pending = self.queue.qsize()
+        if was_busy and pending:
+            await context.bot.send_message(self.main_chat_id, f"Queued ({pending} pending).")
+
+    async def _enqueue_text_prompt(self, text: str, context: ContextTypes.DEFAULT_TYPE) -> None:
         was_busy = self.busy
         await self.queue.put(WorkItem(text))
         await self._send_typing_action()
         pending = self.queue.qsize()
         if was_busy and pending:
-            await context.bot.send_message(chat_id, f"Queued ({pending} pending).")
+            await context.bot.send_message(self.main_chat_id, f"Queued ({pending} pending).")
+
+    # ------------------------------------------------------------------
+    # Command handlers
+    # ------------------------------------------------------------------
 
     async def _handle_pilot_command(self, text: str, context: ContextTypes.DEFAULT_TYPE) -> bool:
         chat_id = self.main_chat_id
         if chat_id is None:
             return True
+
         cmd, _, arg = text.partition(" ")
+
         if cmd == "/help":
-            await context.bot.send_message(chat_id, HELP)
-        elif cmd == "/new":
-            was_busy = self.busy
-            await self.queue.put(WorkItem("", command="/new"))
-            await self._send_typing_action()
-            pending = self.queue.qsize()
-            if was_busy and pending:
-                await context.bot.send_message(chat_id, f"Queued ({pending} pending).")
-        elif cmd == "/sessions":
-            await self._remember_current_session()
-            lines = ["Known sessions:"]
-            items = sorted(self.sessions.items(), reverse=True)
-            if len(items) > 20:
-                lines.append(f"  (showing last 20 of {len(items)} sessions)")
-                items = items[:20]
-            for i, (no, path) in enumerate(items):
-                mark = "*" if no == self.active_session_no else " "
-                title, last_time = self._get_session_info(path)
-                time_str = f" ({last_time})" if last_time else ""
-                lines.append(f"{mark} {no}: {title}{time_str}")
-                if i < len(items) - 1:
-                    lines.append("")
-            await context.bot.send_message(chat_id, "\n".join(lines))
-        elif cmd == "/session":
-            no_str = arg.strip()
-            if not no_str.isdigit() or int(no_str) not in self.sessions:
-                await context.bot.send_message(chat_id, "Usage: /session <id>")
-            else:
-                was_busy = self.busy
-                await self.queue.put(WorkItem("", command="/session", session_no=int(no_str)))
-                await self._send_typing_action()
-                pending = self.queue.qsize()
-                if was_busy and pending:
-                    await context.bot.send_message(chat_id, f"Queued ({pending} pending).")
-        elif cmd == "/behavior":
+            await context.bot.send_message(chat_id, HELP_TEXT)
+            return True
+
+        if cmd == "/new":
+            await self._enqueue_command("/new", context)
+            return True
+
+        if cmd == "/sessions":
+            await self._list_sessions(context)
+            return True
+
+        if cmd == "/session":
+            await self._switch_session(arg, context)
+            return True
+
+        if cmd == "/behavior":
             await context.bot.send_message(chat_id, self.behavior_prompt)
-        elif cmd == "/behavior_change":
-            if not arg:
-                await context.bot.send_message(chat_id, "Usage: /behavior_change <string>")
-            else:
-                self.behavior_prompt = arg
-                self.inject_behavior_next = True
-                self._save_config()
-                await context.bot.send_message(chat_id, "Behavior prompt changed. It will be applied to the next new session/first prompt.")
-        elif cmd == "/stop":
-            cleared = self._clear_queue()
-            restarted = False
-            self.pending_ui = None
-            try:
-                await self.pi.abort(timeout=2.0)
-                # Verify the RPC loop is responsive. If it cannot answer quickly,
-                # kill/restart pi rather than leaving the bot wedged.
-                await asyncio.wait_for(self.pi.get_state(), timeout=2.0)
-            except Exception:
-                log.exception("pi abort/responsiveness check failed; restarting pi RPC")
-                await self.pi.restart()
-                await self._remember_current_session()
-                restarted = True
-            self.current_text = "Stopped."
-            self.current_thinking = ""
-            self.current_status = ""
-            await self.update_reply("Stopped.", force=True)
-            suffix = f" Cleared {cleared} queued prompt(s)." if cleared else ""
-            restart_note = " pi was unresponsive and was restarted." if restarted else ""
-            await context.bot.send_message(chat_id, f"Stopped.{suffix}{restart_note}")
-        else:
-            return False
-        return True
+            return True
+
+        if cmd == "/behavior_change":
+            await self._change_behavior(arg, context)
+            return True
+
+        if cmd == "/stop":
+            await self._stop_bot(context)
+            return True
+
+        # Unknown slash command – forward to pi.
+        return False
+
+    async def _enqueue_command(self, command: str, context: ContextTypes.DEFAULT_TYPE) -> None:
+        was_busy = self.busy
+        await self.queue.put(WorkItem("", command=command))
+        await self._send_typing_action()
+        pending = self.queue.qsize()
+        if was_busy and pending:
+            await context.bot.send_message(self.main_chat_id, f"Queued ({pending} pending).")
+
+    async def _list_sessions(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self._remember_current_session()
+        lines = ["Known sessions:"]
+        items = sorted(self.sessions.items(), reverse=True)
+
+        if len(items) > _MAX_SESSION_LIST:
+            lines.append(f"  (showing last {_MAX_SESSION_LIST} of {len(items)} sessions)")
+            items = items[:_MAX_SESSION_LIST]
+
+        for i, (no, path) in enumerate(items):
+            mark = "*" if no == self.active_session_no else " "
+            title, last_time = self._get_session_info(path)
+            time_str = f" ({last_time})" if last_time else ""
+            lines.append(f"{mark} {no}: {title}{time_str}")
+            if i < len(items) - 1:
+                lines.append("")
+
+        await context.bot.send_message(self.main_chat_id, "\n".join(lines))
+
+    async def _switch_session(self, arg: str, context: ContextTypes.DEFAULT_TYPE) -> None:
+        no_str = arg.strip()
+        if not no_str.isdigit() or int(no_str) not in self.sessions:
+            await context.bot.send_message(self.main_chat_id, "Usage: /session <id>")
+            return
+
+        was_busy = self.busy
+        await self.queue.put(WorkItem("", command="/session", session_no=int(no_str)))
+        await self._send_typing_action()
+        pending = self.queue.qsize()
+        if was_busy and pending:
+            await context.bot.send_message(self.main_chat_id, f"Queued ({pending} pending).")
+
+    async def _change_behavior(self, arg: str, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not arg:
+            await context.bot.send_message(self.main_chat_id, "Usage: /behavior_change <string>")
+            return
+
+        self.behavior_prompt = arg
+        self.inject_behavior_next = True
+        self._save_config()
+        await context.bot.send_message(
+            self.main_chat_id,
+            "Behavior prompt changed. It will be applied to the next new session/first prompt.",
+        )
+
+    async def _stop_bot(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        cleared = self._clear_queue()
+        restarted = False
+        self.pending_ui = None
+
+        try:
+            await self.pi.abort(timeout=_ABORT_TIMEOUT)
+            # Verify the RPC loop is responsive.
+            await asyncio.wait_for(self.pi.get_state(), timeout=_ABORT_TIMEOUT)
+        except Exception:
+            log.exception("pi abort/responsiveness check failed; restarting pi RPC")
+            await self.pi.restart()
+            await self._remember_current_session()
+            restarted = True
+
+        self.current_text = "Stopped."
+        self.current_thinking = ""
+        self.current_status = ""
+        await self.update_reply("Stopped.", force=True)
+
+        suffix = f" Cleared {cleared} queued prompt(s)." if cleared else ""
+        restart_note = " pi was unresponsive and was restarted." if restarted else ""
+        await context.bot.send_message(self.main_chat_id, f"Stopped.{suffix}{restart_note}")
 
     def _clear_queue(self) -> int:
         cleared = 0
@@ -225,66 +343,48 @@ class PilotApp:
                 cleared += 1
         return cleared
 
+    # ------------------------------------------------------------------
+    # File download
+    # ------------------------------------------------------------------
+
     async def _download_incoming_file(self, msg: Any, context: ContextTypes.DEFAULT_TYPE) -> str | None:
         attachment = msg.document or (msg.photo[-1] if msg.photo else None) or msg.effective_attachment
         if isinstance(attachment, (list, tuple)):
             attachment = attachment[-1] if attachment else None
+
         if not attachment or not getattr(attachment, "file_id", None):
             return None
-        name = getattr(attachment, "file_name", None) or f"telegram-photo-{getattr(attachment, 'file_unique_id', uuid.uuid4().hex)}.jpg"
+
+        name = (
+            getattr(attachment, "file_name", None)
+            or f"telegram-photo-{getattr(attachment, 'file_unique_id', uuid.uuid4().hex)}.jpg"
+        )
         safe = "".join(c if c.isalnum() or c in ".-_" else "_" for c in name).strip("._") or "telegram-file"
         dest = self.files_received_dir / f"{uuid.uuid4().hex}-{safe}"
         self.files_received_dir.mkdir(parents=True, exist_ok=True)
+
         tg_file = await context.bot.get_file(attachment.file_id)
         await tg_file.download_to_drive(custom_path=str(dest))
         return str(dest)
+
+    # ------------------------------------------------------------------
+    # Worker loop
+    # ------------------------------------------------------------------
 
     async def worker(self) -> None:
         while True:
             item = await self.queue.get()
             self.busy = True
             typing_task = asyncio.create_task(self._typing_loop())
+
             self.current_text = ""
             self.current_thinking = ""
             self.current_status = ""
             previous_active = self.active_session_no
             restored_active = False
+
             try:
-                if item.command == "/new":
-                    await self.pi.new_session()
-                    await self._remember_current_session()
-                    self.inject_behavior_next = True
-                    if self.main_chat_id and self.app:
-                        await self.app.bot.send_message(self.main_chat_id, "Started a new pi session.")
-                elif item.command == "/session":
-                    no = item.session_no
-                    await self.pi.switch_session(self.sessions[no])
-                    self.active_session_no = no
-                    self.inject_behavior_next = False
-                    if self.main_chat_id and self.app:
-                        await self.app.bot.send_message(self.main_chat_id, f"Switched to session {no}.")
-                else:
-                    prompt = item.prompt
-                    if item.cronjob_id:
-                        await self.pi.new_session()
-                        await self._remember_current_session(make_active=False)
-                        prompt = f"{self.behavior_prompt}\n\nUser prompt:\n{prompt}"
-                    elif self.inject_behavior_next:
-                        prompt = f"{self.behavior_prompt}\n\nUser prompt:\n{prompt}"
-                        self.inject_behavior_next = False
-                    if self.main_chat_id and self.app:
-                        msg = await self.app.bot.send_message(self.main_chat_id, "Thinking…")
-                        self.current_reply = ReplyHandle(self.main_chat_id, msg.message_id)
-                    await self.pi.prompt_and_wait(prompt, streaming_behavior="followUp")
-                    await self._remember_current_session(make_active=not bool(item.cronjob_id))
-                    final = self.current_text.strip() or self.current_status.strip() or "No assistant output was returned."
-                    await self.send_final_reply(final)
-                    if item.cronjob_id:
-                        self._mark_prompt_status(item.cronjob_id, "success")
-                        if previous_active and previous_active in self.sessions:
-                            await self.pi.switch_session(self.sessions[previous_active])
-                            self.active_session_no = previous_active
-                            restored_active = True
+                restored_active = await self._process_work_item(item, previous_active)
             except Exception as e:
                 log.exception("prompt failed")
                 if item.cronjob_id:
@@ -297,10 +397,85 @@ class PilotApp:
                         self.active_session_no = previous_active
                     except Exception:
                         log.exception("failed to restore active session after cronjob")
+
                 typing_task.cancel()
                 self.current_reply = None
                 self.busy = False
                 self.queue.task_done()
+
+    async def _process_work_item(
+        self,
+        item: WorkItem,
+        previous_active: int | None,
+    ) -> bool:
+        if item.command == "/new":
+            await self._do_new_session()
+            return False
+
+        if item.command == "/session":
+            await self._do_switch_session(item.session_no)
+            return False
+
+        return await self._do_prompt(item, previous_active)
+
+    async def _do_new_session(self) -> None:
+        await self.pi.new_session()
+        await self._remember_current_session()
+        self.inject_behavior_next = True
+        if self.main_chat_id and self.app:
+            await self.app.bot.send_message(self.main_chat_id, "Started a new pi session.")
+
+    async def _do_switch_session(self, session_no: int | None) -> None:
+        if session_no is None:
+            return
+        await self.pi.switch_session(self.sessions[session_no])
+        self.active_session_no = session_no
+        self.inject_behavior_next = False
+        if self.main_chat_id and self.app:
+            await self.app.bot.send_message(self.main_chat_id, f"Switched to session {session_no}.")
+
+    async def _do_prompt(
+        self,
+        item: WorkItem,
+        previous_active: int | None,
+    ) -> bool:
+        if item.cronjob_id:
+            await self.pi.new_session()
+            await self._remember_current_session(make_active=False)
+
+        prompt = self._build_prompt(item)
+
+        if self.main_chat_id and self.app:
+            msg = await self.app.bot.send_message(self.main_chat_id, "Thinking…")
+            self.current_reply = ReplyHandle(self.main_chat_id, msg.message_id)
+
+        await self.pi.prompt_and_wait(prompt, streaming_behavior="followUp")
+        await self._remember_current_session(make_active=not bool(item.cronjob_id))
+
+        final = self.current_text.strip() or self.current_status.strip() or "No assistant output was returned."
+        await self.send_final_reply(final)
+
+        if item.cronjob_id:
+            self._mark_prompt_status(item.cronjob_id, "success")
+            if previous_active and previous_active in self.sessions:
+                await self.pi.switch_session(self.sessions[previous_active])
+                self.active_session_no = previous_active
+                return True
+
+        return False
+
+    def _build_prompt(self, item: WorkItem) -> str:
+        prompt = item.prompt
+        if item.cronjob_id:
+            prompt = f"{self.behavior_prompt}\n\nUser prompt:\n{prompt}"
+        elif self.inject_behavior_next:
+            prompt = f"{self.behavior_prompt}\n\nUser prompt:\n{prompt}"
+            self.inject_behavior_next = False
+        return prompt
+
+    # ------------------------------------------------------------------
+    # Typing indicator
+    # ------------------------------------------------------------------
 
     async def _send_typing_action(self) -> None:
         if self.main_chat_id and self.app:
@@ -313,75 +488,118 @@ class PilotApp:
         try:
             while True:
                 await self._send_typing_action()
-                await asyncio.sleep(4)
+                await asyncio.sleep(_TYPING_INTERVAL)
         except asyncio.CancelledError:
             pass
 
+    # ------------------------------------------------------------------
+    # pi event handler
+    # ------------------------------------------------------------------
+
     async def on_pi_event(self, event: dict[str, Any]) -> None:
         typ = event.get("type")
+
         if typ == "message_update":
-            delta = event.get("assistantMessageEvent") or {}
-            dtyp = delta.get("type")
-            if dtyp == "text_delta":
-                self.current_text += delta.get("delta", "")
-            elif dtyp == "thinking_delta":
-                self.current_thinking += delta.get("delta", "")
-            elif dtyp == "error":
-                err = self._extract_assistant_error(delta.get("error")) or str(delta.get("reason") or "error")
-                self.current_text = f"Error: {err}"
-            await self.update_reply(self._compose_display())
+            await self._handle_message_update(event)
         elif typ == "message_end":
-            self._capture_message(event.get("message"))
-            await self.update_reply(self._compose_display(), force=True)
+            await self._handle_message_end(event)
         elif typ == "agent_end":
-            for message in event.get("messages") or []:
-                self._capture_message(message)
-            await self.update_reply(self._compose_display(), force=True)
+            await self._handle_agent_end(event)
         elif typ == "agent_start":
-            self.current_status = "Agent started…"
-            await self.update_reply(self._compose_display(), force=True)
+            await self._handle_agent_start()
         elif typ == "turn_start":
-            self.current_status = "Thinking…"
-            await self.update_reply(self._compose_display())
+            await self._handle_turn_start()
         elif typ == "tool_execution_start":
-            self.current_status = f"Running tool: {event.get('toolName')}…"
-            await self.update_reply(self._compose_display())
+            await self._handle_tool_execution_start(event)
         elif typ == "tool_execution_end":
-            self.current_status = f"Finished tool: {event.get('toolName')}"
-            await self.update_reply(self._compose_display())
+            await self._handle_tool_execution_end(event)
         elif typ == "auto_retry_start":
-            attempt = event.get("attempt")
-            max_attempts = event.get("maxAttempts")
-            delay_ms = event.get("delayMs") or 0
-            seconds = max(1, round(float(delay_ms) / 1000))
-            err = str(event.get("errorMessage") or "provider error")
-            self.current_status = f"Provider error; retrying {attempt}/{max_attempts} in {seconds}s…\n{err[-1200:]}"
-            await self.update_reply(self._compose_display(), force=True)
+            await self._handle_auto_retry_start(event)
         elif typ == "auto_retry_end":
-            if event.get("success") is False:
-                self.current_text = f"Error: {event.get('finalError') or 'provider retry failed'}"
-                self.current_status = ""
-                await self.update_reply(self._compose_display(), force=True)
-            else:
-                self.current_status = "Retry succeeded; continuing…"
-                await self.update_reply(self._compose_display(), force=True)
+            await self._handle_auto_retry_end(event)
         elif typ == "queue_update":
-            steering = len(event.get("steering") or [])
-            follow_up = len(event.get("followUp") or [])
-            if steering or follow_up:
-                self.current_status = f"Queued in pi: {steering} steering, {follow_up} follow-up"
-                await self.update_reply(self._compose_display())
+            await self._handle_queue_update(event)
         elif typ == "extension_ui_request":
             await self._handle_extension_ui_request(event)
         elif typ in {"extension_error", "compaction_end"}:
             log.info("pi event: %s", event)
 
+    async def _handle_message_update(self, event: dict[str, Any]) -> None:
+        delta = event.get("assistantMessageEvent") or {}
+        dtyp = delta.get("type")
+
+        if dtyp == "text_delta":
+            self.current_text += delta.get("delta", "")
+        elif dtyp == "thinking_delta":
+            self.current_thinking += delta.get("delta", "")
+        elif dtyp == "error":
+            err = self._extract_assistant_error(delta.get("error")) or str(delta.get("reason") or "error")
+            self.current_text = f"Error: {err}"
+
+        await self.update_reply(self._compose_display())
+
+    async def _handle_message_end(self, event: dict[str, Any]) -> None:
+        self._capture_message(event.get("message"))
+        await self.update_reply(self._compose_display(), force=True)
+
+    async def _handle_agent_end(self, event: dict[str, Any]) -> None:
+        for message in event.get("messages") or []:
+            self._capture_message(message)
+        await self.update_reply(self._compose_display(), force=True)
+
+    async def _handle_agent_start(self) -> None:
+        self.current_status = "Agent started…"
+        await self.update_reply(self._compose_display(), force=True)
+
+    async def _handle_turn_start(self) -> None:
+        self.current_status = "Thinking…"
+        await self.update_reply(self._compose_display())
+
+    async def _handle_tool_execution_start(self, event: dict[str, Any]) -> None:
+        self.current_status = f"Running tool: {event.get('toolName')}…"
+        await self.update_reply(self._compose_display())
+
+    async def _handle_tool_execution_end(self, event: dict[str, Any]) -> None:
+        self.current_status = f"Finished tool: {event.get('toolName')}"
+        await self.update_reply(self._compose_display())
+
+    async def _handle_auto_retry_start(self, event: dict[str, Any]) -> None:
+        attempt = event.get("attempt")
+        max_attempts = event.get("maxAttempts")
+        delay_ms = event.get("delayMs") or 0
+        seconds = max(1, round(float(delay_ms) / 1000))
+        err = str(event.get("errorMessage") or "provider error")
+        self.current_status = f"Provider error; retrying {attempt}/{max_attempts} in {seconds}s…\n{err[-1200:]}"
+        await self.update_reply(self._compose_display(), force=True)
+
+    async def _handle_auto_retry_end(self, event: dict[str, Any]) -> None:
+        if event.get("success") is False:
+            self.current_text = f"Error: {event.get('finalError') or 'provider retry failed'}"
+            self.current_status = ""
+            await self.update_reply(self._compose_display(), force=True)
+        else:
+            self.current_status = "Retry succeeded; continuing…"
+            await self.update_reply(self._compose_display(), force=True)
+
+    async def _handle_queue_update(self, event: dict[str, Any]) -> None:
+        steering = len(event.get("steering") or [])
+        follow_up = len(event.get("followUp") or [])
+        if steering or follow_up:
+            self.current_status = f"Queued in pi: {steering} steering, {follow_up} follow-up"
+            await self.update_reply(self._compose_display())
+
+    # ------------------------------------------------------------------
+    # Message extraction helpers
+    # ------------------------------------------------------------------
+
     def _capture_message(self, message: Any) -> None:
         if not isinstance(message, dict) or message.get("role") != "assistant":
             return
+
         text = self._extract_assistant_text(message)
         thinking = self._extract_assistant_thinking(message)
         error = self._extract_assistant_error(message)
+
         if thinking and not self.current_thinking:
             self.current_thinking = thinking
         if error:
@@ -394,20 +612,20 @@ class PilotApp:
     def _extract_assistant_text(self, message: Any) -> str:
         if not isinstance(message, dict):
             return ""
-        chunks: list[str] = []
-        for item in message.get("content") or []:
-            if isinstance(item, dict) and item.get("type") == "text":
-                chunks.append(str(item.get("text") or ""))
-        return "".join(chunks).strip()
+        return "".join(
+            str(item.get("text") or "")
+            for item in message.get("content") or []
+            if isinstance(item, dict) and item.get("type") == "text"
+        ).strip()
 
     def _extract_assistant_thinking(self, message: Any) -> str:
         if not isinstance(message, dict):
             return ""
-        chunks: list[str] = []
-        for item in message.get("content") or []:
-            if isinstance(item, dict) and item.get("type") == "thinking":
-                chunks.append(str(item.get("thinking") or ""))
-        return "".join(chunks).strip()
+        return "".join(
+            str(item.get("thinking") or "")
+            for item in message.get("content") or []
+            if isinstance(item, dict) and item.get("type") == "thinking"
+        ).strip()
 
     def _extract_assistant_error(self, message: Any) -> str:
         if isinstance(message, str):
@@ -425,6 +643,7 @@ class PilotApp:
                 ),
                 "",
             )
+
         if message.get("stopReason") != "error":
             return error
 
@@ -435,12 +654,14 @@ class PilotApp:
                 f"responseId: {message.get('responseId')}",
                 f"session: {self.sessions.get(self.active_session_no or -1)}",
             )
-            if not value.endswith((': None', ': '))
+            if not value.endswith(": None") and not value.endswith(": ")
         ]
+
         lines = [error or "Provider returned an error before completing the response."]
         if details:
             lines.extend(["", "Details:", *[f"- {detail}" for detail in details]])
         lines.extend(["", "The session should still be usable; you can continue in it if you want."])
+
         return "\n".join(lines)
 
     def _compose_display(self) -> str:
@@ -453,48 +674,35 @@ class PilotApp:
             body += "\n\n" + self.current_status
         return body
 
+    # ------------------------------------------------------------------
+    # Telegram reply helpers
+    # ------------------------------------------------------------------
+
+    def _is_markdown_v2(self) -> bool:
+        return self.cfg.telegram_parse_mode.lower() == "markdownv2"
+
+    def _format_parts(self, text: str) -> tuple[list[str], ParseMode | None]:
+        markdown = self._is_markdown_v2()
+        parts = format_for_telegram(text, markdown_v2=markdown)
+        parse_mode = ParseMode.MARKDOWN_V2 if markdown else None
+        return parts, parse_mode
+
     async def send_final_reply(self, text: str) -> None:
         if not self.current_reply or not self.app:
             return
-        markdown = self.cfg.telegram_parse_mode.lower() == "markdownv2"
-        parts = format_for_telegram(text, markdown_v2=markdown)
-        parse_mode = ParseMode.MARKDOWN_V2 if markdown else None
+
+        parts, parse_mode = self._format_parts(text)
         bot = self.app.bot
 
-        async def send_parts() -> None:
+        async def _send() -> None:
             for part in parts:
                 await bot.send_message(self.current_reply.chat_id, part or " ", parse_mode=parse_mode)
 
-        try:
-            try:
-                await send_parts()
-            except RetryAfter as e:
-                await asyncio.sleep(float(e.retry_after))
-                await send_parts()
-        except BadRequest as e:
-            log.warning("telegram final markdown send failed; retrying plain text: %s", e)
-            parts = format_for_telegram(text, markdown_v2=False)
-            parse_mode = None
-            try:
-                try:
-                    await send_parts()
-                except RetryAfter as retry:
-                    await asyncio.sleep(float(retry.retry_after))
-                    await send_parts()
-            except Exception:
-                log.exception("telegram final plain-text send failed; keeping thinking message")
-                return
-        except (NetworkError, TimedOut) as e:
-            log.warning("telegram final send failed; retrying once: %s", e)
-            try:
-                await send_parts()
-            except Exception:
-                log.exception("telegram final send retry failed; keeping thinking message")
-                return
-        except Exception:
-            log.exception("telegram final send failed; keeping thinking message")
+        success = await self._send_with_retry(_send, is_final=True)
+        if not success:
             return
 
+        # Delete the old "Thinking…" message and any extra split messages.
         for mid in [self.current_reply.main_message_id, *self.current_reply.extra_message_ids]:
             if mid is None:
                 continue
@@ -507,18 +715,20 @@ class PilotApp:
     async def update_reply(self, text: str, force: bool = False) -> None:
         if not self.current_reply or not self.app:
             return
+
         now = asyncio.get_running_loop().time()
-        if not force and now - self.current_reply.last_update < 1.0:
+        if not force and now - self.current_reply.last_update < _MIN_UPDATE_INTERVAL:
             return
         if text == self.current_reply.last_text and not force:
             return
+
         self.current_reply.last_text = text
         self.current_reply.last_update = now
-        markdown = self.cfg.telegram_parse_mode.lower() == "markdownv2"
-        parts = format_for_telegram(text, markdown_v2=markdown)
-        parse_mode = ParseMode.MARKDOWN_V2 if markdown else None
+
+        parts, parse_mode = self._format_parts(text)
         bot = self.app.bot
-        try:
+
+        async def _edit() -> None:
             await bot.edit_message_text(
                 chat_id=self.current_reply.chat_id,
                 message_id=self.current_reply.main_message_id,
@@ -535,67 +745,147 @@ class PilotApp:
             for part in parts[1:]:
                 m = await bot.send_message(self.current_reply.chat_id, part, parse_mode=parse_mode)
                 self.current_reply.extra_message_ids.append(m.message_id)
-        except RetryAfter as e:
-            await asyncio.sleep(float(e.retry_after))
-        except (BadRequest, NetworkError, TimedOut) as e:
+
+        await self._send_with_retry(_edit, is_final=False)
+
+    async def _send_with_retry(self, sender: Any, is_final: bool) -> bool:
+        """Run a Telegram sender coroutine with retry logic. Returns True on success."""
+        bot = self.app.bot if self.app else None
+        if bot is None:
+            return False
+
+        try:
+            try:
+                await sender()
+            except RetryAfter as e:
+                await asyncio.sleep(float(e.retry_after))
+                await sender()
+            return True
+        except BadRequest as e:
+            if is_final:
+                log.warning("telegram final markdown send failed; retrying plain text: %s", e)
+                return await self._send_final_plain_text()
             log.warning("telegram update failed: %s", e)
+        except (NetworkError, TimedOut) as e:
+            if is_final:
+                log.warning("telegram final send failed; retrying once: %s", e)
+                try:
+                    await sender()
+                    return True
+                except Exception:
+                    log.exception("telegram final send retry failed; keeping thinking message")
+                    return False
+            log.warning("telegram update failed: %s", e)
+        except Exception:
+            if is_final:
+                log.exception("telegram final send failed; keeping thinking message")
+            else:
+                log.exception("telegram update failed")
+        return False
+
+    async def _send_final_plain_text(self) -> bool:
+        if not self.current_reply or not self.app:
+            return False
+
+        parts = format_for_telegram(self.current_reply.last_text, markdown_v2=False)
+        bot = self.app.bot
+
+        try:
+            try:
+                for part in parts:
+                    await bot.send_message(self.current_reply.chat_id, part or " ")
+            except RetryAfter as retry:
+                await asyncio.sleep(float(retry.retry_after))
+                for part in parts:
+                    await bot.send_message(self.current_reply.chat_id, part or " ")
+            return True
+        except Exception:
+            log.exception("telegram final plain-text send failed; keeping thinking message")
+            return False
+
+    # ------------------------------------------------------------------
+    # File outbox watcher
+    # ------------------------------------------------------------------
 
     async def telegram_file_outbox_watcher(self) -> None:
         self.telegram_file_outbox_dir.mkdir(parents=True, exist_ok=True)
         while True:
             try:
-                for path in sorted(self.telegram_file_outbox_dir.glob("*.json")):
-                    if self.main_chat_id is None or not self.app:
-                        break
-                    try:
-                        data = json.loads(path.read_text(encoding="utf-8"))
-                        file_path = Path(str(data.get("path") or ""))
-                        if not file_path.is_file():
-                            raise ValueError(f"not a file: {file_path}")
-                        caption = str(data.get("caption") or "")[:1024] or None
-                        with file_path.open("rb") as f:
-                            await self.app.bot.send_document(self.main_chat_id, document=f, filename=file_path.name, caption=caption)
-                        path.unlink(missing_ok=True)
-                    except Exception as e:
-                        log.exception("failed to send Telegram file request %s", path)
-                        try:
-                            path.rename(path.with_suffix(".error"))
-                        except Exception:
-                            pass
-                        if self.main_chat_id and self.app:
-                            await self.app.bot.send_message(self.main_chat_id, f"Telegram file send error: {e}")
+                await self._process_telegram_file_outbox()
             except Exception:
                 log.exception("telegram file outbox watcher failed")
             await asyncio.sleep(1)
+
+    async def _process_telegram_file_outbox(self) -> None:
+        for path in sorted(self.telegram_file_outbox_dir.glob("*.json")):
+            if self.main_chat_id is None or not self.app:
+                break
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                file_path = Path(str(data.get("path") or ""))
+                if not file_path.is_file():
+                    raise ValueError(f"not a file: {file_path}")
+
+                caption = str(data.get("caption") or "")[:1024] or None
+                with file_path.open("rb") as f:
+                    await self.app.bot.send_document(
+                        self.main_chat_id,
+                        document=f,
+                        filename=file_path.name,
+                        caption=caption,
+                    )
+                path.unlink(missing_ok=True)
+            except Exception as e:
+                log.exception("failed to send Telegram file request %s", path)
+                try:
+                    path.rename(path.with_suffix(".error"))
+                except Exception:
+                    pass
+                if self.main_chat_id and self.app:
+                    await self.app.bot.send_message(self.main_chat_id, f"Telegram file send error: {e}")
+
+    # ------------------------------------------------------------------
+    # Prompt inbox watcher
+    # ------------------------------------------------------------------
 
     async def prompt_inbox_watcher(self) -> None:
         self.prompt_inbox_dir.mkdir(parents=True, exist_ok=True)
         while True:
             try:
-                for path in sorted(self.prompt_inbox_dir.glob("*.json")):
-                    if self.main_chat_id is None:
-                        break
-                    try:
-                        data = json.loads(path.read_text(encoding="utf-8"))
-                        prompt = str(data.get("prompt") or "")
-                        if not prompt.strip():
-                            raise ValueError("prompt inbox item has no prompt")
-                        source_id = str(data.get("id") or "") or None
-                        await self.queue.put(WorkItem(prompt, cronjob_id=source_id if data.get("source") == "cronjobs-skill" else None))
-                        path.unlink(missing_ok=True)
-                        if self.app and data.get("title"):
-                            await self.app.bot.send_message(self.main_chat_id, str(data["title"]))
-                    except Exception as e:
-                        log.exception("failed to process prompt inbox item %s", path)
-                        try:
-                            path.rename(path.with_suffix(".error"))
-                        except Exception:
-                            pass
-                        if self.main_chat_id and self.app:
-                            await self.app.bot.send_message(self.main_chat_id, f"Prompt inbox error: {e}")
+                await self._process_prompt_inbox()
             except Exception:
                 log.exception("prompt inbox watcher failed")
             await asyncio.sleep(2)
+
+    async def _process_prompt_inbox(self) -> None:
+        for path in sorted(self.prompt_inbox_dir.glob("*.json")):
+            if self.main_chat_id is None:
+                break
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                prompt = str(data.get("prompt") or "")
+                if not prompt.strip():
+                    raise ValueError("prompt inbox item has no prompt")
+
+                source_id = str(data.get("id") or "") or None
+                is_cronjob = data.get("source") == "cronjobs-skill"
+                await self.queue.put(WorkItem(prompt, cronjob_id=source_id if is_cronjob else None))
+                path.unlink(missing_ok=True)
+
+                if self.app and data.get("title"):
+                    await self.app.bot.send_message(self.main_chat_id, str(data["title"]))
+            except Exception as e:
+                log.exception("failed to process prompt inbox item %s", path)
+                try:
+                    path.rename(path.with_suffix(".error"))
+                except Exception:
+                    pass
+                if self.main_chat_id and self.app:
+                    await self.app.bot.send_message(self.main_chat_id, f"Prompt inbox error: {e}")
+
+    # ------------------------------------------------------------------
+    # Cronjob status helpers
+    # ------------------------------------------------------------------
 
     def _mark_prompt_status(self, item_id: str, status: str) -> None:
         # Generic best-effort status update for prompt inbox producers that use
@@ -605,20 +895,27 @@ class PilotApp:
             path = Path(self.cfg.data_dir) / "cronjobs.json"
             if not path.exists():
                 return
+
             data = json.loads(path.read_text(encoding="utf-8"))
             jobs = data if isinstance(data, list) else data.get("cronjobs", [])
+
             for job in jobs:
                 if job.get("id") == item_id:
-                    job["last_status"] = status[:1000]
-                    from datetime import datetime, timezone
-                    job["last_run_at"] = datetime.now(timezone.utc).isoformat()
-                    job["updated_at"] = job["last_run_at"]
+                    job["last_status"] = status[:_MAX_STATUS_LEN]
+                    now = datetime.now(timezone.utc).isoformat()
+                    job["last_run_at"] = now
+                    job["updated_at"] = now
+
                     tmp = path.with_suffix(".json.tmp")
                     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
                     tmp.replace(path)
                     return
         except Exception:
             log.exception("failed to update prompt status")
+
+    # ------------------------------------------------------------------
+    # Auth & session persistence
+    # ------------------------------------------------------------------
 
     def _load_auth(self) -> None:
         if self.main_user_id is not None and self.main_chat_id is not None:
@@ -632,6 +929,29 @@ class PilotApp:
         except Exception:
             log.exception("failed to load auth file")
 
+    def _save_auth(self) -> None:
+        self._save_config()
+        try:
+            self.auth_file.parent.mkdir(parents=True, exist_ok=True)
+            self.auth_file.write_text(
+                json.dumps({"user_id": self.main_user_id, "chat_id": self.main_chat_id}) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            log.exception("failed to save auth file")
+
+    def _save_config(self) -> None:
+        try:
+            self.cfg = replace(
+                self.cfg,
+                behavior_prompt=self.behavior_prompt,
+                main_user_id=self.main_user_id,
+                main_chat_id=self.main_chat_id,
+            )
+            persist_config(self.cfg)
+        except Exception:
+            log.exception("failed to save config file")
+
     def _load_sessions_at_startup(self) -> None:
         try:
             session_dir = Path(self.cfg.data_dir) / "pi-sessions"
@@ -643,87 +963,100 @@ class PilotApp:
         except Exception:
             log.exception("failed to load sessions at startup")
 
-    def _save_config(self) -> None:
-        try:
-            self.cfg = replace(self.cfg, behavior_prompt=self.behavior_prompt, main_user_id=self.main_user_id, main_chat_id=self.main_chat_id)
-            persist_config(self.cfg)
-        except Exception:
-            log.exception("failed to save config file")
-
-    def _save_auth(self) -> None:
-        self._save_config()
-        try:
-            self.auth_file.parent.mkdir(parents=True, exist_ok=True)
-            self.auth_file.write_text(json.dumps({"user_id": self.main_user_id, "chat_id": self.main_chat_id}) + "\n", encoding="utf-8")
-        except Exception:
-            log.exception("failed to save auth file")
-
-    def _get_session_info(self, path: str) -> tuple[str, str]:
-        """Return (title, last_message_time_str) for a session file."""
-        title = "Untitled"
-        last_time = ""
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            for line in lines:
-                data = json.loads(line)
-                if data.get("type") == "message":
-                    msg = data.get("message", {})
-                    if msg.get("role") == "user" and title == "Untitled":
-                        for item in msg.get("content", []):
-                            if isinstance(item, dict) and item.get("type") == "text":
-                                text = str(item.get("text", "")).strip()
-                                if text:
-                                    if "User prompt:" in text:
-                                        text = text.split("User prompt:", 1)[1].strip()
-                                    first = text.split("\n")[0]
-                                    title = (first[:57] + "...") if len(first) > 60 else first
-                                    break
-                    if title != "Untitled":
-                        break
-            for line in reversed(lines):
-                data = json.loads(line)
-                if data.get("type") == "message":
-                    ts = data.get("timestamp", "")
-                    if ts:
-                        from datetime import datetime
-                        try:
-                            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                            last_time = dt.strftime("%d.%m. %H:%M")
-                        except ValueError:
-                            pass
-                        break
-            return title, last_time
-        except Exception:
-            return title, last_time
+    # ------------------------------------------------------------------
+    # Session info helpers
+    # ------------------------------------------------------------------
 
     async def _remember_current_session(self, make_active: bool = True) -> None:
         try:
             state = await self.pi.get_state()
         except Exception:
             return
+
         path = state.get("sessionFile")
         if not path:
             return
+
         for no, existing in self.sessions.items():
             if existing == path:
                 if make_active:
                     self.active_session_no = no
                 return
+
         no = max(self.sessions.keys(), default=0) + 1
         self.sessions[no] = path
         if make_active:
             self.active_session_no = no
 
+    def _get_session_info(self, path: str) -> tuple[str, str]:
+        """Return (title, last_message_time_str) for a session file."""
+        title = "Untitled"
+        last_time = ""
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception:
+            return title, last_time
+
+        # Find title from first user message.
+        for line in lines:
+            try:
+                data = json.loads(line)
+            except Exception:
+                continue
+            if data.get("type") != "message":
+                continue
+            msg = data.get("message", {})
+            if msg.get("role") != "user" or title != "Untitled":
+                continue
+            for item in msg.get("content", []):
+                if not isinstance(item, dict) or item.get("type") != "text":
+                    continue
+                text = str(item.get("text", "")).strip()
+                if not text:
+                    continue
+                if "User prompt:" in text:
+                    text = text.split("User prompt:", 1)[1].strip()
+                first = text.split("\n")[0]
+                title = (first[:57] + "...") if len(first) > 60 else first
+                break
+            if title != "Untitled":
+                break
+
+        # Find timestamp of last message.
+        for line in reversed(lines):
+            try:
+                data = json.loads(line)
+            except Exception:
+                continue
+            if data.get("type") == "message":
+                ts = data.get("timestamp", "")
+                if ts:
+                    try:
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        last_time = dt.strftime("%d.%m. %H:%M")
+                    except ValueError:
+                        pass
+                break
+
+        return title, last_time
+
+    # ------------------------------------------------------------------
+    # Extension UI helpers
+    # ------------------------------------------------------------------
+
     async def _handle_extension_ui_request(self, event: dict[str, Any]) -> None:
         if not self.main_chat_id or not self.app:
             return
+
         method = event.get("method")
         if method in {"notify", "setStatus", "setWidget", "setTitle", "set_editor_text"}:
             msg = event.get("message") or event.get("title") or event.get("statusText")
             if msg:
                 await self.app.bot.send_message(self.main_chat_id, str(msg))
             return
+
         self.pending_ui = event
         if method == "select":
             opts = event.get("options") or []
@@ -733,17 +1066,21 @@ class PilotApp:
             prompt = f"{event.get('title', 'Confirm')}\n{event.get('message', '')}\nReply yes or no."
         else:
             prompt = event.get("title") or f"pi requests {method} input"
+
         await self.app.bot.send_message(self.main_chat_id, prompt)
 
     async def _answer_pending_ui(self, text: str, context: ContextTypes.DEFAULT_TYPE) -> None:
         event = self.pending_ui or {}
         self.pending_ui = None
         method = event.get("method")
+
         data: dict[str, Any] = {"id": event.get("id")}
-        if text.strip().lower() in {"/cancel", "cancel"}:
+        lowered = text.strip().lower()
+
+        if lowered in {"/cancel", "cancel"}:
             data["cancelled"] = True
         elif method == "confirm":
-            data["confirmed"] = text.strip().lower() in {"y", "yes", "true", "1", "ok"}
+            data["confirmed"] = lowered in {"y", "yes", "true", "1", "ok"}
         elif method == "select":
             opts = event.get("options") or []
             value = text.strip()
@@ -752,13 +1089,21 @@ class PilotApp:
             data["value"] = value
         else:
             data["value"] = text
+
         await self.pi.extension_ui_response(data)
         await context.bot.send_message(self.main_chat_id, "Sent response to pi.")
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def main() -> None:
     cfg = load_config()
-    logging.basicConfig(level=getattr(logging, cfg.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     # httpx INFO logs include full Telegram Bot API URLs, which contain the bot
     # token. Keep them out of container logs.
     logging.getLogger("httpx").setLevel(logging.WARNING)
