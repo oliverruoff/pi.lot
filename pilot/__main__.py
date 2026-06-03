@@ -439,6 +439,10 @@ class PilotApp:
         item: WorkItem,
         previous_active: int | None,
     ) -> bool:
+        if item.cronjob_id:
+            await self.pi.new_session()
+            await self._remember_current_session(make_active=False)
+
         prompt = self._build_prompt(item)
 
         if self.main_chat_id and self.app:
