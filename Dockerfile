@@ -17,7 +17,7 @@ RUN apt-get update \
         ca-certificates \
         tzdata \
         cron \
-    && npm install -g @earendil-works/pi-coding-agent@0.78.0 \
+    && npm install -g @earendil-works/pi-coding-agent@0.79.0 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
