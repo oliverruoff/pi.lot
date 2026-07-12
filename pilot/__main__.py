@@ -697,14 +697,23 @@ class PilotApp:
 
         parts, parse_mode = self._format_parts(text)
         bot = self.app.bot
+        sent_message_ids: list[int] = []
 
         async def _send() -> None:
             for part in parts:
-                await bot.send_message(self.current_reply.chat_id, part or " ", parse_mode=parse_mode)
+                message = await bot.send_message(
+                    self.current_reply.chat_id,
+                    part or " ",
+                    parse_mode=parse_mode,
+                    disable_notification=False,
+                )
+                sent_message_ids.append(message.message_id)
 
-        success = await self._send_with_retry(_send, is_final=True)
+        success = await self._send_with_retry(_send, is_final=True, final_text=text)
         if not success:
             return
+
+        log.info("telegram final sent: chat_id=%s message_ids=%s", self.current_reply.chat_id, sent_message_ids)
 
         # Delete the old "Thinking…" message and any extra split messages.
         for mid in [self.current_reply.main_message_id, *self.current_reply.extra_message_ids]:
@@ -752,7 +761,7 @@ class PilotApp:
 
         await self._send_with_retry(_edit, is_final=False)
 
-    async def _send_with_retry(self, sender: Any, is_final: bool) -> bool:
+    async def _send_with_retry(self, sender: Any, is_final: bool, final_text: str | None = None) -> bool:
         """Run a Telegram sender coroutine with retry logic. Returns True on success."""
         bot = self.app.bot if self.app else None
         if bot is None:
@@ -768,7 +777,7 @@ class PilotApp:
         except BadRequest as e:
             if is_final:
                 log.warning("telegram final markdown send failed; retrying plain text: %s", e)
-                return await self._send_final_plain_text()
+                return await self._send_final_plain_text(final_text or self.current_reply.last_text)
             log.warning("telegram update failed: %s", e)
         except (NetworkError, TimedOut) as e:
             if is_final:
@@ -787,21 +796,29 @@ class PilotApp:
                 log.exception("telegram update failed")
         return False
 
-    async def _send_final_plain_text(self) -> bool:
+    async def _send_final_plain_text(self, text: str) -> bool:
         if not self.current_reply or not self.app:
             return False
 
-        parts = format_for_telegram(self.current_reply.last_text, markdown_v2=False)
+        parts = format_for_telegram(text, markdown_v2=False)
         bot = self.app.bot
 
         try:
             try:
                 for part in parts:
-                    await bot.send_message(self.current_reply.chat_id, part or " ")
+                    await bot.send_message(
+                        self.current_reply.chat_id,
+                        part or " ",
+                        disable_notification=False,
+                    )
             except RetryAfter as retry:
                 await asyncio.sleep(float(retry.retry_after))
                 for part in parts:
-                    await bot.send_message(self.current_reply.chat_id, part or " ")
+                    await bot.send_message(
+                        self.current_reply.chat_id,
+                        part or " ",
+                        disable_notification=False,
+                    )
             return True
         except Exception:
             log.exception("telegram final plain-text send failed; keeping thinking message")
