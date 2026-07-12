@@ -93,7 +93,6 @@ class PilotApp:
 
         self.current_reply: ReplyHandle | None = None
         self.current_text = ""
-        self.current_thinking = ""
         self.current_status = ""
 
         self.behavior_prompt = cfg.behavior_prompt
@@ -323,7 +322,6 @@ class PilotApp:
             restarted = True
 
         self.current_text = "Stopped."
-        self.current_thinking = ""
         self.current_status = ""
         await self.update_reply("Stopped.", force=True)
 
@@ -378,7 +376,6 @@ class PilotApp:
             typing_task = asyncio.create_task(self._typing_loop())
 
             self.current_text = ""
-            self.current_thinking = ""
             self.current_status = ""
             previous_active = self.active_session_no
             restored_active = False
@@ -530,8 +527,6 @@ class PilotApp:
 
         if dtyp == "text_delta":
             self.current_text += delta.get("delta", "")
-        elif dtyp == "thinking_delta":
-            self.current_thinking += delta.get("delta", "")
         elif dtyp == "error":
             err = self._extract_assistant_error(delta.get("error")) or str(delta.get("reason") or "error")
             self.current_text = f"Error: {err}"
@@ -597,11 +592,8 @@ class PilotApp:
             return
 
         text = self._extract_assistant_text(message)
-        thinking = self._extract_assistant_thinking(message)
         error = self._extract_assistant_error(message)
 
-        if thinking and not self.current_thinking:
-            self.current_thinking = thinking
         if error:
             self.current_text = f"Error: {error}"
             self.current_status = ""
@@ -616,15 +608,6 @@ class PilotApp:
             str(item.get("text") or "")
             for item in message.get("content") or []
             if isinstance(item, dict) and item.get("type") == "text"
-        ).strip()
-
-    def _extract_assistant_thinking(self, message: Any) -> str:
-        if not isinstance(message, dict):
-            return ""
-        return "".join(
-            str(item.get("thinking") or "")
-            for item in message.get("content") or []
-            if isinstance(item, dict) and item.get("type") == "thinking"
         ).strip()
 
     def _extract_assistant_error(self, message: Any) -> str:
@@ -665,11 +648,11 @@ class PilotApp:
         return "\n".join(lines)
 
     def _compose_display(self) -> str:
-        body = self.current_text.strip()
-        if not body:
-            body = "Thinking…"
-            if self.current_thinking:
-                body += "\n\n" + self.current_thinking[-3000:]
+        # NOTE: Assistant "thinking" (reasoning) content must never be shown to
+        # the Telegram user. We only display the assistant's final text, the
+        # current status, or a "Thinking…" placeholder while text is still
+        # streaming in.
+        body = self.current_text.strip() or "Thinking…"
         if self.current_status and self.current_status.strip() != body.strip():
             body += "\n\n" + self.current_status
         return body
