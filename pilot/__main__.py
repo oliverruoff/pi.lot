@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -50,6 +51,8 @@ _MAX_SESSION_LIST = 20
 
 # Max length for cronjob status strings.
 _MAX_STATUS_LEN = 1000
+
+_LEADING_THINK_BLOCKS = re.compile(r"^\s*(?:<think>.*?</think>\s*)+", re.DOTALL)
 
 
 # ---------------------------------------------------------------------------
@@ -612,11 +615,12 @@ class PilotApp:
     def _extract_assistant_text(self, message: Any) -> str:
         if not isinstance(message, dict):
             return ""
-        return "".join(
+        text = "".join(
             str(item.get("text") or "")
             for item in message.get("content") or []
             if isinstance(item, dict) and item.get("type") == "text"
         ).strip()
+        return _LEADING_THINK_BLOCKS.sub("", text)
 
     def _extract_assistant_thinking(self, message: Any) -> str:
         if not isinstance(message, dict):
