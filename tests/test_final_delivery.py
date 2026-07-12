@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from pilot.__main__ import PilotApp, ReplyHandle
+from pilot.app import PilotApp
+from pilot.models import ReplyHandle
 
 
 @pytest.mark.asyncio

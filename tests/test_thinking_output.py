@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from pilot.__main__ import PilotApp
+from pilot.app import PilotApp
 
 
 @pytest.mark.asyncio
