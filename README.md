@@ -15,6 +15,7 @@
 ## Contents
 
 - [What does pi.lot do?](#what-does-pilot-do)
+- [How it works](#how-it-works)
 - [Quick Start](#quick-start)
 - [Important Settings](#important-settings)
 - [Bundled Skills](#bundled-skills)
@@ -33,6 +34,33 @@
 - **Sessions** — pi remembers the context of your conversation. You can switch between different projects or start fresh anytime.
 - **Automation** — Create reminders or recurring tasks, e.g. "Every morning at 8 AM, summarize my emails".
 - **Skills extend pi** — Add extra capabilities like YouTube summaries, web search, Gmail access, or smart-home control.
+
+---
+
+## How it works
+
+The runtime has one intentionally simple path:
+
+1. Telegram sends an update to `PilotApp` in `pilot/app.py`.
+2. Text, files, and local commands are placed in one queue.
+3. A single worker sends each item to pi through `pilot/pi_rpc.py`.
+4. Streaming pi events update the temporary "Thinking…" Telegram message.
+5. The completed answer is formatted by `pilot/telegram_format.py` and sent as a final message.
+
+The small modules around that flow each have one job:
+
+| Module | Responsibility |
+|--------|----------------|
+| `pilot/__main__.py` | Starts the application for `python -m pilot` |
+| `pilot/app.py` | Coordinates Telegram, the work queue, pi, sessions, and files |
+| `pilot/config.py` | Loads and persists configuration |
+| `pilot/pi_rpc.py` | Starts pi and exchanges JSON RPC messages |
+| `pilot/assistant_messages.py` | Extracts text, thinking, and errors from pi messages |
+| `pilot/session_info.py` | Reads titles and timestamps for `/sessions` |
+| `pilot/telegram_format.py` | Converts and splits output for Telegram |
+
+Bundled skills remain self-contained below `pilot/skills/`. They communicate
+with the bridge through pi or the small file inboxes under `/workspace/data`.
 
 ---
 

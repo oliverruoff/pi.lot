@@ -1,3 +1,5 @@
+"""Load pi.lot settings from the environment and persistent storage."""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,5 @@
+"""Convert common Markdown into messages accepted by Telegram."""
+
 from __future__ import annotations
 
 import re

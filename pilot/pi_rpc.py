@@ -1,3 +1,5 @@
+"""Asynchronous JSON-lines client for pi's RPC mode."""
+
 from __future__ import annotations
 
 import asyncio

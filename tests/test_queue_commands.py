@@ -8,8 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pilot.__main__ import PilotApp, WorkItem
+from pilot.app import PilotApp
 from pilot.config import Config
+from pilot.models import WorkItem
 
 
 @pytest.fixture
@@ -29,7 +30,7 @@ def cfg():
 
 @pytest.fixture
 def app(cfg):
-    with patch("pilot.__main__.PiRPC"):
+    with patch("pilot.app.PiRPC"):
         app = PilotApp(cfg)
         # Mock pi RPC
         app.pi = MagicMock()
@@ -70,6 +71,19 @@ async def _drain_queue(app: PilotApp, worker_task: asyncio.Task, timeout: float 
         await worker_task
     except asyncio.CancelledError:
         pass
+
+
+@pytest.mark.asyncio
+async def test_busy_app_reports_new_queue_item(app):
+    context = MagicMock()
+    context.bot.send_message = AsyncMock()
+    app.busy = True
+
+    await app._enqueue_text_prompt("Queued prompt", context)
+
+    assert (await app.queue.get()).prompt == "Queued prompt"
+    app.queue.task_done()
+    context.bot.send_message.assert_awaited_once_with(12345, "Queued (1 pending).")
 
 
 @pytest.mark.asyncio
