@@ -138,6 +138,12 @@ class PilotApp:
         await self.app.start()
         await self.app.updater.start_polling()  # type: ignore[union-attr]
 
+        if self.main_chat_id is not None:
+            await self.app.bot.send_message(
+                self.main_chat_id,
+                self._session_message("pi.lot started.", self.active_session_no),
+            )
+
         log.info("pi.lot started; waiting for first Telegram user")
         await asyncio.Event().wait()
 
@@ -156,7 +162,13 @@ class PilotApp:
             self.main_user_id = user_id
             self.main_chat_id = chat_id
             self._save_auth()
-            await context.bot.send_message(chat_id, "pi.lot started. You are now the authorized user.")
+            await context.bot.send_message(
+                chat_id,
+                self._session_message(
+                    "pi.lot started. You are now the authorized user.",
+                    self.active_session_no,
+                ),
+            )
             return
 
         if user_id != self.main_user_id:
@@ -421,7 +433,10 @@ class PilotApp:
         await self._remember_current_session()
         self.inject_behavior_next = True
         if self.main_chat_id and self.app:
-            await self.app.bot.send_message(self.main_chat_id, "Started a new pi session.")
+            await self.app.bot.send_message(
+                self.main_chat_id,
+                self._session_message("Started a new pi session.", self.active_session_no),
+            )
 
     async def _do_switch_session(self, session_no: int | None) -> None:
         if session_no is None:
@@ -448,9 +463,11 @@ class PilotApp:
             self.current_reply = ReplyHandle(self.main_chat_id, msg.message_id)
 
         await self.pi.prompt_and_wait(prompt, streaming_behavior="followUp")
-        await self._remember_current_session(make_active=not bool(item.cronjob_id))
+        session_no = await self._remember_current_session(make_active=not bool(item.cronjob_id))
 
         final = self.current_text.strip() or self.current_status.strip() or "No assistant output was returned."
+        if item.cronjob_id:
+            final = self._session_message(final, session_no)
         await self.send_final_reply(final)
 
         if item.cronjob_id:
@@ -935,26 +952,31 @@ class PilotApp:
     # Session info helpers
     # ------------------------------------------------------------------
 
-    async def _remember_current_session(self, make_active: bool = True) -> None:
+    async def _remember_current_session(self, make_active: bool = True) -> int | None:
         try:
             state = await self.pi.get_state()
         except Exception:
-            return
+            return None
 
         path = state.get("sessionFile")
         if not path:
-            return
+            return None
 
         for no, existing in self.sessions.items():
             if existing == path:
                 if make_active:
                     self.active_session_no = no
-                return
+                return no
 
         no = max(self.sessions.keys(), default=0) + 1
         self.sessions[no] = path
         if make_active:
             self.active_session_no = no
+        return no
+
+    def _session_message(self, text: str, session_no: int | None) -> str:
+        no = session_no if session_no is not None else "unknown"
+        return f"Session ID: {no}\n\n{text}"
 
     def _get_session_info(self, path: str) -> tuple[str, str]:
         return read_session_info(path)

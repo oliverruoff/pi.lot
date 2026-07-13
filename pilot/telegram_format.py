@@ -213,7 +213,7 @@ def markdown_to_telegram_markdown_v2(text: str) -> str:
         bullet = _BULLET_RE.match(raw_line)
         if bullet:
             indent = escape_markdown_v2(bullet.group(1))
-            lines.append(f"{indent}\\- {_inline_markdown_to_markdown_v2(bullet.group(2))}")
+            lines.append(f"{indent}• {_inline_markdown_to_markdown_v2(bullet.group(2))}")
             continue
 
         ordered = _ORDERED_RE.match(raw_line)

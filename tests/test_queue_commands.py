@@ -117,6 +117,34 @@ async def test_new_is_queued_after_prompt(app):
 
 
 @pytest.mark.asyncio
+async def test_new_reports_the_session_id(app):
+    await app._do_new_session()
+
+    app.app.bot.send_message.assert_awaited_once_with(
+        12345,
+        "Session ID: 1\n\nStarted a new pi session.",
+    )
+
+
+def test_startup_message_reports_the_current_session_id(app):
+    assert app._session_message("pi.lot started.", app.active_session_no) == (
+        "Session ID: 1\n\npi.lot started."
+    )
+
+
+@pytest.mark.asyncio
+async def test_cronjob_final_answer_starts_with_its_session_id(app):
+    cron_session_path = str(Path(app.cfg.data_dir) / "cron.jsonl")
+    app.pi.get_state = AsyncMock(return_value={"sessionFile": cron_session_path})
+    app.current_text = "Cron result"
+    app.send_final_reply = AsyncMock()
+
+    await app._do_prompt(WorkItem("Run report", cronjob_id="daily"), previous_active=1)
+
+    app.send_final_reply.assert_awaited_once_with("Session ID: 2\n\nCron result")
+
+
+@pytest.mark.asyncio
 async def test_session_switch_is_queued_after_prompt(app):
     """A /session command enqueued while busy runs AFTER the preceding prompt."""
     call_order = []
