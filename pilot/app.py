@@ -22,7 +22,7 @@ from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 from telegram.ext import Application, ApplicationBuilder, ContextTypes, MessageHandler, filters
 
-from .assistant_messages import extract_error, extract_text, extract_thinking
+from .assistant_messages import extract_error, extract_text, extract_thinking, strip_thinking_blocks
 from .config import Config, load_config, persist_config
 from .models import ReplyHandle, WorkItem
 from .pi_rpc import PiRPC
@@ -633,7 +633,7 @@ class PilotApp:
         return sessions.get(active_session_no or -1)
 
     def _compose_display(self) -> str:
-        body = self.current_text.strip()
+        body = strip_thinking_blocks(self.current_text.strip())
         if not body:
             body = "Thinking…"
             if self.current_thinking:
