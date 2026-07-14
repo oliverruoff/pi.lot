@@ -22,6 +22,11 @@ def extract_text(message: Any) -> str:
     return _LEADING_THINK_BLOCKS.sub("", text)
 
 
+def strip_thinking_blocks(text: str) -> str:
+    """Remove leading <think>…</think> blocks from a raw text fragment."""
+    return _LEADING_THINK_BLOCKS.sub("", text)
+
+
 def extract_thinking(message: Any) -> str:
     """Return thinking content included in a completed assistant message."""
     if not isinstance(message, dict):
