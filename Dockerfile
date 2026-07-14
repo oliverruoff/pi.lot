@@ -17,6 +17,7 @@ RUN apt-get update \
         ca-certificates \
         tzdata \
         cron \
+    && npm install -g npm@12.0.1 \
     && npm install -g @earendil-works/pi-coding-agent@0.80.6 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -42,7 +43,8 @@ COPY pilot/pi_extensions/ /root/.pi/agent/extensions/
 
 WORKDIR /app
 COPY pilot/requirements.txt ./
-RUN pip install -r requirements.txt
+RUN pip install --upgrade pip==26.1.2 \
+    && pip install -r requirements.txt
 COPY pilot ./pilot
 
 RUN mkdir -p /workspace/data
