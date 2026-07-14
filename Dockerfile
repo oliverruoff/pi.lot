@@ -17,9 +17,15 @@ RUN apt-get update \
         ca-certificates \
         tzdata \
         cron \
-    && npm install -g @earendil-works/pi-coding-agent@0.80.6 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# CACHEBUST forces this layer (and everything after) to rebuild on every deploy.sh run,
+# so `npm install -g @latest` actually fetches fresh packages instead of being
+# satisfied from Docker's layer cache. deploy.sh passes --build-arg CACHEBUST=$(date +%s).
+ARG CACHEBUST=unset
+RUN npm install -g npm@latest \
+    && npm install -g @earendil-works/pi-coding-agent@latest
 
 RUN mkdir -p /root/.pi/agent/skills /workspace/skills
 
@@ -42,7 +48,13 @@ COPY pilot/pi_extensions/ /root/.pi/agent/extensions/
 
 WORKDIR /app
 COPY pilot/requirements.txt ./
-RUN pip install -r requirements.txt
+# CACHEBUST again: see comment above the npm install.
+# Note: we deliberately do NOT pass --upgrade to the requirements install — the
+# pinned versions in pilot/requirements.txt must be respected. Only the pip CLI
+# itself is upgraded here, plus a layer-cache bust so `pip install` actually runs.
+ARG CACHEBUST=unset
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
 COPY pilot ./pilot
 
 RUN mkdir -p /workspace/data
