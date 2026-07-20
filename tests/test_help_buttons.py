@@ -6,7 +6,7 @@ import pytest
 
 from telegram import InlineKeyboardMarkup
 
-from pilot.app import PilotApp, _BUTTON_COMMANDS
+from pilot.app import PilotApp, _BUTTON_COMMANDS, _MY_COMMANDS
 
 
 def _make_app() -> PilotApp:
@@ -99,3 +99,22 @@ async def test_help_button_with_unknown_callback_is_ignored():
 
     app._enqueue_command.assert_not_called()
     query.edit_message_reply_markup.assert_not_called()
+
+
+def test_my_commands_lists_all_pilot_commands():
+    """Telegram's '/' menu must list every pilot command with a description."""
+    names = {c.command for c in _MY_COMMANDS}
+    assert names == {
+        "help",
+        "new",
+        "sessions",
+        "session",
+        "behavior",
+        "behavior_change",
+        "stop",
+    }
+    # Telegram only accepts [a-z0-9_] for command names, so /? cannot be
+    # registered. Make sure no invalid name slips in.
+    for c in _MY_COMMANDS:
+        assert c.command.replace("_", "").isalnum()
+        assert c.description, f"missing description for /{c.command}"

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 from telegram.ext import (
@@ -67,6 +67,18 @@ _MAX_SESSION_LIST = 20
 
 # Slash commands that take no argument and are exposed as buttons in /help.
 _BUTTON_COMMANDS = [("help", "/?"), "new", "sessions", "behavior", "stop"]
+
+# Slash commands shown in Telegram's "/" suggestion menu.
+# /? is an alias for /help but Telegram only accepts [a-z0-9_] for command names.
+_MY_COMMANDS = [
+    BotCommand("help", "Show slash-commands (alias: /?)"),
+    BotCommand("new", "Start a new pi session"),
+    BotCommand("sessions", "List known sessions"),
+    BotCommand("session", "Switch to a session: /session <id>"),
+    BotCommand("behavior", "Show the current behavior prompt"),
+    BotCommand("behavior_change", "Change the behavior prompt: /behavior_change <text>"),
+    BotCommand("stop", "Abort the current run and clear the queue"),
+]
 
 # Max length for cronjob status strings.
 _MAX_STATUS_LEN = 1000
@@ -147,6 +159,11 @@ class PilotApp:
 
         await self.app.initialize()
         await self.app.start()
+        # Register the "/" suggestion menu. Failures must not block startup.
+        try:
+            await self.app.bot.set_my_commands(_MY_COMMANDS)
+        except Exception:
+            log.exception("failed to register Telegram command suggestions")
         await self.app.updater.start_polling()  # type: ignore[union-attr]
 
         if self.main_chat_id is not None:
