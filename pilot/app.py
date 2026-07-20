@@ -17,10 +17,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from telegram import Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
-from telegram.ext import Application, ApplicationBuilder, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from .assistant_messages import extract_error, extract_text, extract_thinking, strip_thinking_blocks
 from .config import Config, load_config, persist_config
@@ -36,7 +43,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 HELP_TEXT = """pi.lot commands:
-/help - Show slash-commands
+/help (alias /?) - Show slash-commands
 /new - New pi session
 /sessions - List known sessions
 /session <id> - Switch to session
@@ -57,6 +64,21 @@ _ABORT_TIMEOUT = 2.0
 
 # Number of session entries to show in /sessions.
 _MAX_SESSION_LIST = 20
+
+# Slash commands that take no argument and are exposed as buttons in /help.
+_BUTTON_COMMANDS = [("help", "/?"), "new", "sessions", "behavior", "stop"]
+
+# Slash commands shown in Telegram's "/" suggestion menu.
+# /? is an alias for /help but Telegram only accepts [a-z0-9_] for command names.
+_MY_COMMANDS = [
+    BotCommand("help", "Show slash-commands (alias: /?)"),
+    BotCommand("new", "Start a new pi session"),
+    BotCommand("sessions", "List known sessions"),
+    BotCommand("session", "Switch to a session: /session <id>"),
+    BotCommand("behavior", "Show the current behavior prompt"),
+    BotCommand("behavior_change", "Change the behavior prompt: /behavior_change <text>"),
+    BotCommand("stop", "Abort the current run and clear the queue"),
+]
 
 # Max length for cronjob status strings.
 _MAX_STATUS_LEN = 1000
@@ -129,6 +151,7 @@ class PilotApp:
             .build()
         )
         self.app.add_handler(MessageHandler(filters.ALL, self.on_update))
+        self.app.add_handler(CallbackQueryHandler(self.on_callback_query))
 
         asyncio.create_task(self.worker())
         asyncio.create_task(self.prompt_inbox_watcher())
@@ -136,6 +159,11 @@ class PilotApp:
 
         await self.app.initialize()
         await self.app.start()
+        # Register the "/" suggestion menu. Failures must not block startup.
+        try:
+            await self.app.bot.set_my_commands(_MY_COMMANDS)
+        except Exception:
+            log.exception("failed to register Telegram command suggestions")
         await self.app.updater.start_polling()  # type: ignore[union-attr]
 
         if self.main_chat_id is not None:
@@ -241,8 +269,8 @@ class PilotApp:
 
         cmd, _, arg = text.partition(" ")
 
-        if cmd == "/help":
-            await context.bot.send_message(chat_id, HELP_TEXT)
+        if cmd in {"/help", "/?"}:
+            await self._send_help(context)
             return True
 
         if cmd == "/new":
@@ -271,6 +299,43 @@ class PilotApp:
 
         # Unknown slash command – forward to pi.
         return False
+
+    async def _send_help(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Send the help text plus a button row for the no-arg slash commands."""
+        buttons = [
+            [InlineKeyboardButton(f"/{c}", callback_data=f"cmd:{c}")]
+            for entry in _BUTTON_COMMANDS
+            for c in (entry if isinstance(entry, tuple) else (entry,))
+        ]
+        await context.bot.send_message(
+            self.main_chat_id,
+            HELP_TEXT,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    async def on_callback_query(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle a button press from the /help keyboard."""
+        query = update.callback_query
+        if query is None:
+            return
+        await query.answer()
+
+        data = (query.data or "").strip()
+        if not data.startswith("cmd:"):
+            return
+        cmd = "/" + data[4:].strip()
+
+        # Hide the buttons after a click so they don't linger forever.
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            log.debug("could not clear help keyboard", exc_info=True)
+
+        # Reuse the existing slash-command dispatcher. A trailing space mimics
+        # the message-format used by MessageHandler updates.
+        await self._handle_pilot_command(cmd + " ", context)
 
     async def _enqueue_command(self, command: str, context: ContextTypes.DEFAULT_TYPE) -> None:
         await self._enqueue_work(WorkItem("", command=command), context)
