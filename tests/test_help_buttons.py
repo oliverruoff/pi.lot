@@ -29,11 +29,31 @@ async def test_help_message_includes_button_keyboard():
     context.bot.send_message.assert_awaited_once()
     _, kwargs = context.bot.send_message.call_args
     assert kwargs["reply_markup"] is not None
-    # One button per command, all in a single column.
+    # One button per command (tuples expand to multiple buttons),
+    # all in a single column.
     markup = kwargs["reply_markup"]
     assert isinstance(markup, InlineKeyboardMarkup)
     labels = [btn.text for row in markup.inline_keyboard for btn in row]
-    assert labels == [f"/{c}" for c in _BUTTON_COMMANDS]
+    expected = [
+        f"/{c}"
+        for entry in _BUTTON_COMMANDS
+        for c in (entry if isinstance(entry, tuple) else (entry,))
+    ]
+    assert labels == expected
+
+
+@pytest.mark.asyncio
+async def test_question_mark_alias_dispatches_to_help():
+    """Typing /? should behave exactly like /help."""
+    context = MagicMock()
+
+    app = _make_app()
+    app._send_help = AsyncMock()
+
+    handled = await app._handle_pilot_command("/? ", context)
+
+    assert handled is True
+    app._send_help.assert_awaited_once_with(context)
 
 
 @pytest.mark.asyncio

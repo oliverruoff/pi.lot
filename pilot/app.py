@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 HELP_TEXT = """pi.lot commands:
-/help - Show slash-commands
+/help (alias /?) - Show slash-commands
 /new - New pi session
 /sessions - List known sessions
 /session <id> - Switch to session
@@ -66,7 +66,7 @@ _ABORT_TIMEOUT = 2.0
 _MAX_SESSION_LIST = 20
 
 # Slash commands that take no argument and are exposed as buttons in /help.
-_BUTTON_COMMANDS = ["help", "new", "sessions", "behavior", "stop"]
+_BUTTON_COMMANDS = [("help", "/?"), "new", "sessions", "behavior", "stop"]
 
 # Max length for cronjob status strings.
 _MAX_STATUS_LEN = 1000
@@ -252,7 +252,7 @@ class PilotApp:
 
         cmd, _, arg = text.partition(" ")
 
-        if cmd == "/help":
+        if cmd in {"/help", "/?"}:
             await self._send_help(context)
             return True
 
@@ -287,7 +287,8 @@ class PilotApp:
         """Send the help text plus a button row for the no-arg slash commands."""
         buttons = [
             [InlineKeyboardButton(f"/{c}", callback_data=f"cmd:{c}")]
-            for c in _BUTTON_COMMANDS
+            for entry in _BUTTON_COMMANDS
+            for c in (entry if isinstance(entry, tuple) else (entry,))
         ]
         await context.bot.send_message(
             self.main_chat_id,
