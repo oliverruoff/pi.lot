@@ -1140,6 +1140,7 @@ class PilotApp:
         event = await self._take_pending_ui()
         await self._clear_ui_keyboard(event)
         await self.pi.extension_ui_response({"id": event.get("id"), "value": value})
+        await self.app.bot.send_message(self.main_chat_id, f"User answer: {value}")
 
     async def _take_pending_ui(self) -> dict[str, Any]:
         event = self.pending_ui or {}

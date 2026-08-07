@@ -92,6 +92,7 @@ async def test_button_click_returns_selected_label_and_clears_keyboard():
     app.app.bot.edit_message_reply_markup.assert_awaited_once_with(
         chat_id=12345, message_id=99, reply_markup=None
     )
+    app.app.bot.send_message.assert_awaited_once_with(12345, "User answer: B")
     assert app.pending_ui is None
 
 
@@ -126,4 +127,3 @@ async def test_stale_or_foreign_button_is_ignored():
 
     app.pi.extension_ui_response.assert_not_awaited()
     assert app.pending_ui is not None
-
