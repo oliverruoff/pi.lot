@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import textwrap
 
 MAX_MESSAGE_LEN = 4096
 
@@ -21,6 +22,10 @@ _ORDERED_RE = re.compile(r"^(\s*)(\d+)[.)]\s+(.+)$")
 _QUOTE_RE = re.compile(r"^\s*>\s?(.*)$")
 _RULE_RE = re.compile(r"^\s{0,3}([-*_])(?:\s*\1){2,}\s*$")
 _TABLE_RE = re.compile(r"^\s*\|.+?\|.*$")
+
+TABLE_MAX_WIDTH = 42
+TABLE_COLUMN_GAP = 2
+TABLE_MIN_COLUMN_WIDTH = 4
 
 
 def escape_markdown_v2(text: str) -> str:
@@ -109,7 +114,7 @@ def _is_table_separator(cells: list[str]) -> bool:
     return all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells)
 
 
-def _render_table_as_cards(table_lines: list[str]) -> list[str] | None:
+def _table_data(table_lines: list[str]) -> tuple[list[str], list[list[str]]] | None:
     rows = [_parse_table_row(line) for line in table_lines]
     if len(rows) < 2 or not _is_table_separator(rows[1]):
         return None
@@ -129,6 +134,59 @@ def _render_table_as_cards(table_lines: list[str]) -> list[str] | None:
     if not normalized:
         return None
 
+    return headers, normalized
+
+
+def _table_column_widths(headers: list[str], rows: list[list[str]]) -> list[int] | None:
+    column_count = len(headers)
+    available = TABLE_MAX_WIDTH - TABLE_COLUMN_GAP * (column_count - 1)
+    if available < TABLE_MIN_COLUMN_WIDTH * column_count:
+        return None
+
+    plain_rows = [[_strip_simple_markdown(cell) for cell in row] for row in [headers, *rows]]
+    preferred = [max(len(row[index]) for row in plain_rows) for index in range(column_count)]
+    widths = [min(width, TABLE_MIN_COLUMN_WIDTH) for width in preferred]
+
+    remaining = available - sum(widths)
+    while remaining and any(width < target for width, target in zip(widths, preferred)):
+        index = max(range(column_count), key=lambda i: preferred[i] - widths[i])
+        widths[index] += 1
+        remaining -= 1
+
+    return widths
+
+
+def _wrap_table_cell(value: str, width: int) -> list[str]:
+    value = _strip_simple_markdown(value).strip()
+    return textwrap.wrap(value, width=width, break_long_words=True, break_on_hyphens=False) or [""]
+
+
+def _render_table_as_grid(headers: list[str], rows: list[list[str]]) -> list[str] | None:
+    widths = _table_column_widths(headers, rows)
+    if widths is None:
+        return None
+
+    rendered: list[str] = []
+
+    def append_row(row: list[str]) -> None:
+        wrapped = [_wrap_table_cell(cell, width) for cell, width in zip(row, widths)]
+        for line_index in range(max(len(cell) for cell in wrapped)):
+            cells = [
+                (cell[line_index] if line_index < len(cell) else "").ljust(width)
+                for cell, width in zip(wrapped, widths)
+            ]
+            rendered.append((" " * TABLE_COLUMN_GAP).join(cells).rstrip())
+
+    append_row(headers)
+    rendered.append((" " * TABLE_COLUMN_GAP).join("─" * width for width in widths))
+    for row in rows:
+        append_row(row)
+
+    return rendered
+
+
+def _render_table_as_cards(headers: list[str], normalized: list[list[str]]) -> list[str]:
+    width = len(headers)
     rendered: list[str] = []
 
     if width == 2:
@@ -160,14 +218,21 @@ def _flush_table(table_lines: list[str], lines: list[str]) -> None:
     if not table_lines:
         return
 
-    rendered = _render_table_as_cards(table_lines)
-    if rendered is not None:
-        lines.extend(rendered)
-    else:
+    table = _table_data(table_lines)
+    if table is None:
         lines.append("```")
         for tl in table_lines:
             lines.append(_escape_code_markdown_v2(tl))
         lines.append("```")
+    else:
+        headers, rows = table
+        rendered = _render_table_as_grid(headers, rows)
+        if rendered is None:
+            lines.extend(_render_table_as_cards(headers, rows))
+        else:
+            lines.append("```")
+            lines.extend(_escape_code_markdown_v2(line) for line in rendered)
+            lines.append("```")
 
     table_lines.clear()
 
