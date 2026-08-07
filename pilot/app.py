@@ -274,6 +274,7 @@ class PilotApp:
             return True
 
         if cmd == "/new":
+            await self._cancel_pending_ui()
             await self._enqueue_command("/new", context)
             return True
 
@@ -316,13 +317,16 @@ class PilotApp:
     async def on_callback_query(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Handle a button press from the /help keyboard."""
+        """Handle a button press from a help or extension keyboard."""
         query = update.callback_query
         if query is None:
             return
         await query.answer()
 
         data = (query.data or "").strip()
+        if data.startswith("ui:"):
+            await self._answer_pending_ui_callback(update, context, data)
+            return
         if not data.startswith("cmd:"):
             return
         cmd = "/" + data[4:].strip()
@@ -366,6 +370,7 @@ class PilotApp:
             return
 
         item = WorkItem("", command="/session", session_no=int(no_str))
+        await self._cancel_pending_ui()
         await self._enqueue_work(item, context)
 
     async def _change_behavior(self, arg: str, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -384,7 +389,7 @@ class PilotApp:
     async def _stop_bot(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         cleared = self._clear_queue()
         restarted = False
-        self.pending_ui = None
+        await self._cancel_pending_ui()
 
         try:
             await self.pi.abort(timeout=_ABORT_TIMEOUT)
@@ -1061,21 +1066,35 @@ class PilotApp:
                 await self.app.bot.send_message(self.main_chat_id, str(msg))
             return
 
-        self.pending_ui = event
+        await self._cancel_pending_ui()
         if method == "select":
             opts = event.get("options") or []
             body = "\n".join(f"{i+1}. {o}" for i, o in enumerate(opts))
-            prompt = f"{event.get('title', 'Select an option')}:\n{body}"
+            prompt = str(event.get("title") or "Select an option")
+            markup = None
+            if 1 <= len(opts) <= 8:
+                markup = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(str(option), callback_data=f"ui:{event.get('id')}:{i}")]
+                     for i, option in enumerate(opts)]
+                )
+            elif body:
+                prompt = f"{prompt}:\n{body}"
         elif method == "confirm":
             prompt = f"{event.get('title', 'Confirm')}\n{event.get('message', '')}\nReply yes or no."
+            markup = None
         else:
             prompt = event.get("title") or f"pi requests {method} input"
+            markup = None
 
-        await self.app.bot.send_message(self.main_chat_id, prompt)
+        message = await self.app.bot.send_message(self.main_chat_id, prompt, reply_markup=markup)
+        self.pending_ui = {
+            **event,
+            "message_id": message.message_id,
+        }
 
     async def _answer_pending_ui(self, text: str, context: ContextTypes.DEFAULT_TYPE) -> None:
-        event = self.pending_ui or {}
-        self.pending_ui = None
+        event = await self._take_pending_ui()
+        await self._clear_ui_keyboard(event)
         method = event.get("method")
 
         data: dict[str, Any] = {"id": event.get("id")}
@@ -1096,6 +1115,56 @@ class PilotApp:
 
         await self.pi.extension_ui_response(data)
         await context.bot.send_message(self.main_chat_id, "Sent response to pi.")
+
+    async def _answer_pending_ui_callback(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        callback_data: str,
+    ) -> None:
+        """Resolve a pending select request from an inline button."""
+        if not update.effective_user or update.effective_user.id != self.main_user_id:
+            return
+
+        parts = callback_data.split(":", 2)
+        event = self.pending_ui
+        if len(parts) != 3 or not event or parts[1] != str(event.get("id")):
+            return
+
+        options = event.get("options") or []
+        try:
+            value = options[int(parts[2])]
+        except (ValueError, IndexError):
+            return
+
+        event = await self._take_pending_ui()
+        await self._clear_ui_keyboard(event)
+        await self.pi.extension_ui_response({"id": event.get("id"), "value": value})
+
+    async def _take_pending_ui(self) -> dict[str, Any]:
+        event = self.pending_ui or {}
+        self.pending_ui = None
+        return event
+
+    async def _cancel_pending_ui(self) -> None:
+        if not getattr(self, "pending_ui", None):
+            return
+        event = await self._take_pending_ui()
+        await self._clear_ui_keyboard(event)
+        await self.pi.extension_ui_response({"id": event.get("id"), "cancelled": True})
+
+    async def _clear_ui_keyboard(self, event: dict[str, Any]) -> None:
+        message_id = event.get("message_id")
+        if not message_id or not self.main_chat_id or not self.app:
+            return
+        try:
+            await self.app.bot.edit_message_reply_markup(
+                chat_id=self.main_chat_id,
+                message_id=message_id,
+                reply_markup=None,
+            )
+        except Exception:
+            log.debug("could not clear extension keyboard", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
