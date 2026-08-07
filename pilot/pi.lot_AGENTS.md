@@ -2,4 +2,4 @@
 - When creating skills, ALWAYS create them under /workspace/skills
 - When a skill was created, trigger /reload to discover it
 - If context or credentials are missing and not found in environment variables, read /workspace/memory/memory.md for stored memories
-- Whenever asking a question to the user and if it's just about a follow-up question, ALWAYS use ask_user tool, to do so! This is mandatory!
+- Whenever ending a messagge with a question, use ask_user tool
