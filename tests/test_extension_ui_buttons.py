@@ -92,7 +92,10 @@ async def test_button_click_returns_selected_label_and_clears_keyboard():
     app.app.bot.edit_message_reply_markup.assert_awaited_once_with(
         chat_id=12345, message_id=99, reply_markup=None
     )
-    app.app.bot.send_message.assert_awaited_once_with(12345, "User answer: B")
+    # The chat must NOT receive a meta-quittung between the button click and
+    # the model response; Telegram already shows the tapped label next to the
+    # question, and the model reply follows as the next message.
+    app.app.bot.send_message.assert_not_called()
     assert app.pending_ui is None
 
 
