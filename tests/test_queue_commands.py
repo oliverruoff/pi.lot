@@ -241,3 +241,56 @@ async def test_stop_clears_queued_commands(app):
 
     assert cleared == 2
     assert app.queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_new_with_pending_ui_aborts_pi_and_cancels_ui(app):
+    """/new during an open extension UI question cancels the question, aborts
+    the current pi run so the worker can advance, and queues /new."""
+    context = MagicMock()
+    context.bot.send_message = AsyncMock()
+    app.pending_ui = {
+        "id": "question-1",
+        "method": "select",
+        "options": ["A", "B"],
+        "message_id": 99,
+    }
+    app.pi.extension_ui_response = AsyncMock()
+    app.pi.abort = AsyncMock()
+
+    await app._handle_pilot_command("/new", context)
+
+    app.pi.extension_ui_response.assert_awaited_once_with({
+        "id": "question-1",
+        "cancelled": True,
+    })
+    app.pi.abort.assert_awaited_once()
+    app.pi.get_state.assert_awaited_once()
+    app.app.bot.edit_message_reply_markup.assert_awaited_once_with(
+        chat_id=12345,
+        message_id=99,
+        reply_markup=None,
+    )
+    assert app.pending_ui is None
+    assert not app.queue.empty()
+    item = await app.queue.get()
+    assert item.command == "/new"
+    app.queue.task_done()
+
+
+@pytest.mark.asyncio
+async def test_new_without_pending_ui_is_queued_without_abort(app):
+    """/new without a pending UI is just queued; pi is not aborted."""
+    context = MagicMock()
+    context.bot.send_message = AsyncMock()
+    app.pi.abort = AsyncMock()
+    app.pi.extension_ui_response = AsyncMock()
+
+    await app._handle_pilot_command("/new", context)
+
+    app.pi.abort.assert_not_awaited()
+    app.pi.extension_ui_response.assert_not_awaited()
+    assert app.pending_ui is None
+    item = await app.queue.get()
+    assert item.command == "/new"
+    app.queue.task_done()
