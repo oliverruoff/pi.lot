@@ -275,7 +275,8 @@ class PilotApp:
             return True
 
         if cmd == "/new":
-            await self._cancel_pending_ui()
+            if await self._cancel_pending_ui():
+                await self._abort_for_new_session()
             await self._enqueue_command("/new", context)
             return True
 
@@ -410,6 +411,16 @@ class PilotApp:
         suffix = f" Cleared {cleared} queued prompt(s)." if cleared else ""
         restart_note = " pi was unresponsive and was restarted." if restarted else ""
         await context.bot.send_message(self.main_chat_id, f"Stopped.{suffix}{restart_note}")
+
+    async def _abort_for_new_session(self) -> None:
+        """Release a run blocked on extension UI before queueing /new."""
+        try:
+            await self.pi.abort(timeout=_ABORT_TIMEOUT)
+            await asyncio.wait_for(self.pi.get_state(), timeout=_ABORT_TIMEOUT)
+        except Exception:
+            log.exception("pi abort/responsiveness check failed during /new; restarting pi RPC")
+            await self.pi.restart()
+            await self._remember_current_session()
 
     def _clear_queue(self) -> int:
         cleared = 0
@@ -1187,12 +1198,13 @@ class PilotApp:
         self.pending_ui = None
         return event
 
-    async def _cancel_pending_ui(self) -> None:
+    async def _cancel_pending_ui(self) -> bool:
         if not getattr(self, "pending_ui", None):
-            return
+            return False
         event = await self._take_pending_ui()
         await self._clear_ui_keyboard(event)
         await self.pi.extension_ui_response({"id": event.get("id"), "cancelled": True})
+        return True
 
     async def _clear_ui_keyboard(self, event: dict[str, Any]) -> None:
         message_id = event.get("message_id")

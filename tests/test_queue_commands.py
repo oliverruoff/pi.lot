@@ -128,6 +128,52 @@ async def test_new_reports_the_session_id(app):
     )
 
 
+@pytest.mark.asyncio
+async def test_new_aborts_run_waiting_for_pending_ui_before_it_is_queued(app):
+    context = MagicMock()
+    context.bot.send_message = AsyncMock()
+    app.pending_ui = {
+        "id": "question-1",
+        "method": "select",
+        "options": ["A"],
+        "message_id": 99,
+    }
+    app.pi.extension_ui_response = AsyncMock()
+    app.pi.abort = AsyncMock()
+
+    handled = await app._handle_pilot_command("/new", context)
+
+    assert handled is True
+    app.app.bot.edit_message_reply_markup.assert_awaited_once_with(
+        chat_id=12345,
+        message_id=99,
+        reply_markup=None,
+    )
+    app.pi.extension_ui_response.assert_awaited_once_with({
+        "id": "question-1",
+        "cancelled": True,
+    })
+    app.pi.abort.assert_awaited_once_with(timeout=2.0)
+    item = await app.queue.get()
+    assert item.command == "/new"
+    app.queue.task_done()
+    assert app.pending_ui is None
+
+
+@pytest.mark.asyncio
+async def test_new_without_pending_ui_does_not_abort_current_run(app):
+    context = MagicMock()
+    context.bot.send_message = AsyncMock()
+    app.pi.abort = AsyncMock()
+
+    await app._handle_pilot_command("/new", context)
+
+    app.pi.abort.assert_not_awaited()
+    item = await app.queue.get()
+    assert item.command == "/new"
+    app.queue.task_done()
+
+
 def test_startup_message_reports_the_current_session_id(app):
     assert app._session_message("pi.lot started.", app.active_session_no) == (
         "Session ID: 1\n\npi.lot started."
