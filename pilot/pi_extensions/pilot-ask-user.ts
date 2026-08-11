@@ -5,12 +5,14 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "ask_user",
     label: "Ask User",
-    description: "Ask the user a question with one to eight short, freely chosen answer buttons. Choose the button labels dynamically in the same language and tone as the conversation. Use only a few relevant options; the user may still type a different answer.",
-    promptSnippet: "Ask focused follow-up questions with dynamic answer buttons",
+    description: "Use this tool for every question addressed to the user. Never ask the user a question only in normal assistant text. Always provide at least one short, useful answer button; for confirmations, include the obvious affirmative action (for example, 'Yes, do it!'). Choose labels dynamically in the same language and tone as the conversation. The user may still type a different answer.",
+    promptSnippet: "Always ask the user through ask_user and provide at least one useful answer button",
     promptGuidelines: [
-      "Use ask_user when a question has a small set of likely answers.",
+      "Use ask_user for every question addressed to the user, including clarifications, confirmations, permission requests, preferences, and open-ended questions.",
+      "Never end or continue an assistant message with a textual question for the user. Call ask_user instead.",
+      "Always offer at least one useful, likely answer. For a yes/no or action confirmation, include an affirmative option that names the action, such as 'Yes, do it!'.",
       "Write the question and every option in the same language and tone used with the user.",
-      "Choose all labels dynamically. Do not add generic confirmation or cancellation choices unless they are useful in context.",
+      "Choose concise, self-contained labels dynamically. Add only options that make answering easier; the user can always type a different response.",
       "For multiple choice, provide a short finish_label in the user's language and tone.",
     ],
     parameters: Type.Object({
@@ -18,7 +20,7 @@ export default function (pi: ExtensionAPI) {
       options: Type.Array(Type.String({ description: "Short answer button label" }), {
         minItems: 1,
         maxItems: 8,
-        description: "One to eight likely answers, written in the user's language",
+        description: "Required: one to eight useful likely answers, written in the user's language. For confirmations, include the affirmative action.",
       }),
       multiple: Type.Optional(Type.Boolean({ description: "Allow the user to choose several options" })),
       finish_label: Type.Optional(Type.String({ description: "Model-chosen button label that completes a multiple choice, required when multiple is true" })),
