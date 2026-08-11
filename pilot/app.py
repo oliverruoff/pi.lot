@@ -109,6 +109,7 @@ class PilotApp:
 
         self.queue: asyncio.Queue[WorkItem] = asyncio.Queue()
         self.busy = False
+        self.typing_task: asyncio.Task[None] | None = None
 
         self.current_reply: ReplyHandle | None = None
         self.current_text = ""
@@ -455,7 +456,7 @@ class PilotApp:
         while True:
             item = await self.queue.get()
             self.busy = True
-            typing_task = asyncio.create_task(self._typing_loop())
+            self.typing_task = asyncio.create_task(self._typing_loop())
 
             self.current_text = ""
             self.current_thinking = ""
@@ -478,7 +479,9 @@ class PilotApp:
                     except Exception:
                         log.exception("failed to restore active session after cronjob")
 
-                typing_task.cancel()
+                if self.typing_task:
+                    self.typing_task.cancel()
+                    self.typing_task = None
                 self.current_reply = None
                 self.busy = False
                 self.queue.task_done()
@@ -1067,6 +1070,7 @@ class PilotApp:
             return
 
         await self._cancel_pending_ui()
+        await self._pause_for_ui()
         if method == "select":
             opts = event.get("options") or []
             body = "\n".join(f"{i+1}. {o}" for i, o in enumerate(opts))
@@ -1092,6 +1096,36 @@ class PilotApp:
             "message_id": message.message_id,
         }
 
+    async def _pause_for_ui(self) -> None:
+        """Stop transient output while pi waits for a Telegram answer."""
+        if self.typing_task:
+            self.typing_task.cancel()
+            self.typing_task = None
+
+        if self.current_reply and self.app:
+            for message_id in [
+                self.current_reply.main_message_id,
+                *self.current_reply.extra_message_ids,
+            ]:
+                if message_id is None:
+                    continue
+                try:
+                    await self.app.bot.delete_message(self.current_reply.chat_id, message_id)
+                except Exception:
+                    log.debug("could not clear pre-question reply", exc_info=True)
+        self.current_reply = None
+        self.current_text = ""
+        self.current_thinking = ""
+        self.current_status = ""
+
+    async def _resume_after_ui(self) -> None:
+        """Start a fresh reply below the user's UI answer."""
+        if not self.main_chat_id or not self.app:
+            return
+        message = await self.app.bot.send_message(self.main_chat_id, "Thinking…")
+        self.current_reply = ReplyHandle(self.main_chat_id, message.message_id)
+        self.typing_task = asyncio.create_task(self._typing_loop())
+
     async def _answer_pending_ui(self, text: str, context: ContextTypes.DEFAULT_TYPE) -> None:
         event = await self._take_pending_ui()
         await self._clear_ui_keyboard(event)
@@ -1113,8 +1147,8 @@ class PilotApp:
         else:
             data["value"] = text
 
+        await self._resume_after_ui()
         await self.pi.extension_ui_response(data)
-        await context.bot.send_message(self.main_chat_id, "Sent response to pi.")
 
     async def _answer_pending_ui_callback(
         self,
@@ -1139,10 +1173,8 @@ class PilotApp:
 
         event = await self._take_pending_ui()
         await self._clear_ui_keyboard(event)
-        # Do not post a meta-quittung to the chat: Telegram already shows the
-        # tapped button label next to the original question, and the model
-        # reply will follow as the next message. A "User answer: ..." line
-        # between click and reply breaks the read flow.
+        await self.app.bot.send_message(self.main_chat_id, f"User answered: {value}")
+        await self._resume_after_ui()
         await self.pi.extension_ui_response({"id": event.get("id"), "value": value})
 
     async def _take_pending_ui(self) -> dict[str, Any]:

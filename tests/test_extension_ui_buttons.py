@@ -1,6 +1,6 @@
 """Verify extension UI questions are rendered and resolved through Telegram."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from telegram import InlineKeyboardMarkup
@@ -13,6 +13,11 @@ def _make_app() -> PilotApp:
     app.main_user_id = 7
     app.main_chat_id = 12345
     app.pending_ui = None
+    app.typing_task = None
+    app.current_reply = None
+    app.current_text = ""
+    app.current_thinking = ""
+    app.current_status = ""
     app.pi = MagicMock()
     app.pi.extension_ui_response = AsyncMock()
     app.app = MagicMock()
@@ -20,6 +25,7 @@ def _make_app() -> PilotApp:
     sent = MagicMock(message_id=99)
     app.app.bot.send_message = AsyncMock(return_value=sent)
     app.app.bot.edit_message_reply_markup = AsyncMock()
+    app.app.bot.delete_message = AsyncMock()
     return app
 
 
@@ -40,6 +46,31 @@ async def test_select_request_uses_dynamic_labels_as_buttons():
     assert isinstance(markup, InlineKeyboardMarkup)
     assert [button.text for row in markup.inline_keyboard for button in row] == event["options"]
     assert app.pending_ui["message_id"] == 99
+
+
+@pytest.mark.asyncio
+async def test_select_request_removes_progress_reply_and_stops_typing():
+    app = _make_app()
+    app.current_reply = MagicMock(
+        chat_id=12345,
+        main_message_id=50,
+        extra_message_ids=[51],
+    )
+    app.typing_task = MagicMock()
+
+    await app._handle_extension_ui_request({
+        "id": "request-1",
+        "method": "select",
+        "title": "Wie weiter?",
+        "options": ["A"],
+    })
+
+    assert app.typing_task is None
+    app.app.bot.delete_message.assert_has_awaits([
+        call(12345, 50),
+        call(12345, 51),
+    ])
+    assert app.current_reply is None
 
 
 @pytest.mark.asyncio
@@ -92,11 +123,10 @@ async def test_button_click_returns_selected_label_and_clears_keyboard():
     app.app.bot.edit_message_reply_markup.assert_awaited_once_with(
         chat_id=12345, message_id=99, reply_markup=None
     )
-    # The chat must NOT receive a meta-quittung between the button click and
-    # the model response; Telegram already shows the tapped label next to the
-    # question, and the model reply follows as the next message.
-    app.app.bot.send_message.assert_not_called()
+    assert app.app.bot.send_message.await_args_list[0].args == (12345, "User answered: B")
+    assert app.app.bot.send_message.await_args_list[1].args == (12345, "Thinking…")
     assert app.pending_ui is None
+    app.typing_task.cancel()
 
 
 @pytest.mark.asyncio
@@ -117,6 +147,7 @@ async def test_typed_answer_remains_supported_and_clears_keyboard():
         {"id": "request-1", "value": "Etwas anderes"}
     )
     app.app.bot.edit_message_reply_markup.assert_awaited_once()
+    app.typing_task.cancel()
 
 
 @pytest.mark.asyncio
