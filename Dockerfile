@@ -32,6 +32,9 @@ RUN mkdir -p /root/.pi/agent/skills /workspace/skills
 # add specific model configs (e.g. for improving kimi-code usage)
 COPY pilot/models.json /root/.pi/agent/models.json
 
+# Retry transient provider errors twice, after 20s and 40s.
+COPY pilot/settings.json /root/.pi/agent/settings.json
+
 # add pi.lot agents.md instructions
 COPY pilot/pi.lot_AGENTS.md /root/.pi/agent/AGENTS.md
 
