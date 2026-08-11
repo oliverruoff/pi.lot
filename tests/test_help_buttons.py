@@ -12,6 +12,7 @@ from pilot.app import PilotApp, _BUTTON_COMMANDS, _MY_COMMANDS
 def _make_app() -> PilotApp:
     app = PilotApp.__new__(PilotApp)
     app.main_chat_id = 12345
+    app.pending_ui = None
     app.app = MagicMock()
     app.app.bot = MagicMock()
     app.app.bot.send_message = AsyncMock()

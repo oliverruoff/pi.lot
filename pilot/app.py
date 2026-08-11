@@ -275,7 +275,19 @@ class PilotApp:
             return True
 
         if cmd == "/new":
-            await self._cancel_pending_ui()
+            if self.pending_ui:
+                # An open extension UI request keeps the worker inside
+                # prompt_and_wait even after we send the cancellation, so the
+                # queued /new would otherwise wait forever. Abort the current
+                # pi run as well so the worker can advance to the new session.
+                await self._cancel_pending_ui()
+                try:
+                    await self.pi.abort(timeout=_ABORT_TIMEOUT)
+                    await asyncio.wait_for(self.pi.get_state(), timeout=_ABORT_TIMEOUT)
+                except Exception:
+                    log.exception("pi abort/responsiveness check failed; restarting pi RPC")
+                    await self.pi.restart()
+                    await self._remember_current_session()
             await self._enqueue_command("/new", context)
             return True
 
