@@ -927,6 +927,11 @@ class PilotApp:
 
                 source_id = str(data.get("id") or "") or None
                 is_cronjob = data.get("source") == "cronjobs-skill"
+                if is_cronjob:
+                    # A pending extension UI request keeps the single worker
+                    # inside prompt_and_wait. Cancel it so scheduled work can
+                    # advance instead of waiting indefinitely for Telegram.
+                    await self._cancel_pending_ui()
                 await self.queue.put(WorkItem(prompt, cronjob_id=source_id if is_cronjob else None))
                 path.unlink(missing_ok=True)
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -47,6 +48,7 @@ def app(cfg):
         app.app.bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
         app.app.bot.send_chat_action = AsyncMock()
         app.app.bot.edit_message_text = AsyncMock()
+        app.app.bot.edit_message_reply_markup = AsyncMock()
         app.app.bot.delete_message = AsyncMock()
 
         app.main_chat_id = 12345
@@ -142,6 +144,42 @@ async def test_cronjob_final_answer_starts_with_its_session_id(app):
     await app._do_prompt(WorkItem("Run report", cronjob_id="daily"), previous_active=1)
 
     app.send_final_reply.assert_awaited_once_with("Session ID: 2\n\nCron result")
+
+
+@pytest.mark.asyncio
+async def test_cronjob_cancels_pending_ui_before_it_is_queued(app):
+    app.prompt_inbox_dir.mkdir()
+    inbox_item = app.prompt_inbox_dir / "cron.json"
+    inbox_item.write_text(json.dumps({
+        "id": "daily",
+        "source": "cronjobs-skill",
+        "prompt": "Run report",
+    }))
+    app.pending_ui = {
+        "id": "question-1",
+        "method": "select",
+        "options": ["A"],
+        "message_id": 99,
+    }
+    app.pi.extension_ui_response = AsyncMock()
+
+    await app._process_prompt_inbox()
+
+    app.app.bot.edit_message_reply_markup.assert_awaited_once_with(
+        chat_id=12345,
+        message_id=99,
+        reply_markup=None,
+    )
+    app.pi.extension_ui_response.assert_awaited_once_with({
+        "id": "question-1",
+        "cancelled": True,
+    })
+    item = await app.queue.get()
+    assert item.prompt == "Run report"
+    assert item.cronjob_id == "daily"
+    assert app.pending_ui is None
+    assert not inbox_item.exists()
+    app.queue.task_done()
 
 
 @pytest.mark.asyncio
