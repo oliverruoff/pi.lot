@@ -5,29 +5,22 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "ask_user",
     label: "Ask User",
-    description: "Use this tool for every question addressed to the user. Never ask the user a question only in normal assistant text. Always provide at least one short, useful answer button; for confirmations, include the obvious affirmative action (for example, 'Yes, do it!'). Choose labels dynamically in the same language and tone as the conversation. The user may still type a different answer.",
-    promptSnippet: "Always ask the user through ask_user and provide at least one useful answer button",
-    promptGuidelines: [
-      "Use ask_user for every question addressed to the user, including clarifications, confirmations, permission requests, preferences, and open-ended questions.",
-      "Never end or continue an assistant message with a textual question for the user. Call ask_user instead.",
-      "Always offer at least one useful, likely answer. For a yes/no or action confirmation, include an affirmative option that names the action, such as 'Yes, do it!'.",
-      "Write the question and every option in the same language and tone used with the user.",
-      "Choose concise, self-contained labels dynamically. Add only options that make answering easier; the user can always type a different response.",
-      "For multiple choice, provide a short finish_label in the user's language and tone.",
-    ],
+    description: "Ask the user a question with answer buttons. The user may also type a different answer.",
+    promptSnippet: "Ask user questions with answer buttons",
+    promptGuidelines: ["Use ask_user instead of asking in assistant text. Match the user's language and include at least one likely answer."],
     parameters: Type.Object({
-      question: Type.String({ description: "Question shown to the user" }),
-      options: Type.Array(Type.String({ description: "Short answer button label" }), {
+      question: Type.String({ description: "Question to show" }),
+      options: Type.Array(Type.String(), {
         minItems: 1,
         maxItems: 8,
-        description: "Required: one to eight useful likely answers, written in the user's language. For confirmations, include the affirmative action.",
+        description: "Answer button labels (1-8)",
       }),
-      multiple: Type.Optional(Type.Boolean({ description: "Allow the user to choose several options" })),
-      finish_label: Type.Optional(Type.String({ description: "Model-chosen button label that completes a multiple choice, required when multiple is true" })),
+      multiple: Type.Optional(Type.Boolean({ description: "Allow multiple answers" })),
+      finish_label: Type.Optional(Type.String({ description: "Finish button for multiple answers" })),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (!ctx.hasUI) {
-        return { content: [{ type: "text", text: "No interactive user interface is available." }] };
+        return { content: [{ type: "text", text: "No interactive UI available." }] };
       }
 
       if (!params.multiple) {
@@ -38,7 +31,7 @@ export default function (pi: ExtensionAPI) {
         return {
           content: [{
             type: "text",
-            text: answer === undefined ? "The user did not provide an answer." : `User answered: ${answer}`,
+            text: answer === undefined ? "No answer." : `Answer: ${answer}`,
           }],
         };
       }
@@ -46,7 +39,7 @@ export default function (pi: ExtensionAPI) {
       const finishLabel = params.finish_label?.trim();
       if (!finishLabel || params.options.includes(finishLabel)) {
         return {
-          content: [{ type: "text", text: "multiple choice requires a unique finish_label." }],
+          content: [{ type: "text", text: "multiple requires a unique finish_label." }],
           isError: true,
         };
       }
@@ -61,7 +54,7 @@ export default function (pi: ExtensionAPI) {
         if (answer === undefined) break;
         if (answer === finishLabel) {
           return {
-            content: [{ type: "text", text: `User answered: ${JSON.stringify(selected)}` }],
+            content: [{ type: "text", text: `Answer: ${JSON.stringify(selected)}` }],
           };
         }
         selected.push(answer);
@@ -71,7 +64,7 @@ export default function (pi: ExtensionAPI) {
       return {
         content: [{
           type: "text",
-          text: "The user did not provide an answer.",
+          text: "No answer.",
         }],
       };
     },
