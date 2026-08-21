@@ -38,6 +38,13 @@ from .telegram_format import format_for_telegram
 
 log = logging.getLogger(__name__)
 
+
+def _option_label(option: Any) -> str:
+    """Return the human-readable label from a pi extension UI option."""
+    if isinstance(option, dict):
+        option = option.get("label", option)
+    return str(option)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -1088,7 +1095,8 @@ class PilotApp:
         await self._cancel_pending_ui()
         await self._pause_for_ui()
         if method == "select":
-            opts = event.get("options") or []
+            opts = [_option_label(option) for option in event.get("options") or []]
+            event = {**event, "options": opts}
             body = "\n".join(f"{i+1}. {o}" for i, o in enumerate(opts))
             prompt = str(event.get("title") or "Select an option")
             markup = None
@@ -1189,7 +1197,7 @@ class PilotApp:
 
         event = await self._take_pending_ui()
         await self._clear_ui_keyboard(event)
-        await self.app.bot.send_message(self.main_chat_id, f"User answered: {value}")
+        await self.app.bot.send_message(self.main_chat_id, value)
         await self._resume_after_ui()
         await self.pi.extension_ui_response({"id": event.get("id"), "value": value})
 
