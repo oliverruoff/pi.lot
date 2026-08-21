@@ -49,6 +49,27 @@ async def test_select_request_uses_dynamic_labels_as_buttons():
 
 
 @pytest.mark.asyncio
+async def test_select_request_extracts_label_from_structured_option():
+    app = _make_app()
+    event = {
+        "id": "request-1",
+        "method": "select",
+        "title": "Wie möchtest du weitermachen?",
+        "options": [
+            {"label": "Direkt umsetzen"},
+            "Erst den Diff zeigen",
+        ],
+    }
+
+    await app._handle_extension_ui_request(event)
+
+    _, kwargs = app.app.bot.send_message.call_args
+    labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
+    assert labels == ["Direkt umsetzen", "Erst den Diff zeigen"]
+    assert app.pending_ui["options"] == labels
+
+
+@pytest.mark.asyncio
 async def test_select_request_removes_progress_reply_and_stops_typing():
     app = _make_app()
     app.current_reply = MagicMock(
@@ -123,7 +144,7 @@ async def test_button_click_returns_selected_label_and_clears_keyboard():
     app.app.bot.edit_message_reply_markup.assert_awaited_once_with(
         chat_id=12345, message_id=99, reply_markup=None
     )
-    assert app.app.bot.send_message.await_args_list[0].args == (12345, "User answered: B")
+    assert app.app.bot.send_message.await_args_list[0].args == (12345, "B")
     assert app.app.bot.send_message.await_args_list[1].args == (12345, "Thinking…")
     assert app.pending_ui is None
     app.typing_task.cancel()
