@@ -1,139 +1,121 @@
 ---
 name: memory
-description: Read and save persistent assistant memories in markdown files under /workspace/memory. Use when the user asks to remember something, asks whether something is remembered, asks about previous remembered information, or when missing context may be recoverable from memory.
+description: Read and save durable user memories in a lossless, human-readable Markdown archive with current topic files. Use when the user asks to remember something, asks about previous information, or missing context may exist in memory.
 compatibility: Requires filesystem read/write access to /workspace/memory and Python 3.
 allowed-tools: Bash(python3:*)
 metadata:
-  version: "1.0"
+  version: "2.0"
 ---
 
 # Memory
 
-Use this skill to persist and retrieve concise memories for the user.
+Persist complete memories without imposing a total size limit. Keep the historical archive separate from the smaller files used to navigate and understand current knowledge.
 
-The skill has exactly two logical tools:
+The skill has two normal operations:
 
 1. `read-memory`
 2. `save-memory`
 
-Do not expose, document, or depend on any other memory tool.
-
 ## Storage
-
-All memory files are stored under:
 
 ```text
 /workspace/memory/
+├── memory.md                         # Topic directory and chronological journal
+├── topics/<topic>.md                 # Current knowledge grouped by topic and subject
+└── archive/YYYY/MM/YYYY-MM-DD.md     # Complete append-only daily memories
 ```
 
-The skill uses two kinds of markdown files:
+All files are ordinary, human-readable Markdown.
 
-- `/workspace/memory/memory.md` — standard rolling memory file.
-- `/workspace/memory/YYYY-MM-DD.md` — daily memory files, one file per calendar day.
+### Archive
 
-Each memory is stored as exactly one markdown bullet point on exactly one line, prefixed with a timestamp in system/container local time.
-
-Timestamp format:
-
-```text
-YYYY-MM-DDTHH:MM
-```
-
-Memory text must be as short as possible and straight to the point, without wasting characters and without omitting important information.
-
-Example:
+The archive is the lossless source of truth. Store every memory as one complete line:
 
 ```markdown
-- 2026-05-10T13:47 | The user has a dog named Jacky.
-- 2026-05-10T13:49 | The user prefers concise answers.
+- 2026-08-25T14:30 | The user's dog is named Rocky, correcting the previous name Jacky.
 ```
 
-## Tool: `save-memory`
+Never shorten, rewrite, delete, or replace an archived memory automatically. Corrections are new archive entries. There is no archive size limit.
+
+### Topics
+
+Topic files contain the current understanding, not the complete history. Each topic has stable subject sections and source links:
+
+```markdown
+# Personal
+
+<!-- memory-subject: dog -->
+## Dog
+
+The user's dog is named Rocky.
+
+Sources:
+
+- `archive/2026/05/2026-05-10.md`
+- `archive/2026/08/2026-08-25.md`
+<!-- /memory-subject -->
+```
+
+Prefer an existing topic. Create a short lowercase topic slug only when no existing topic fits. Avoid overlapping topics. Good broad topics include `personal`, `people`, `preferences`, `projects`, `decisions`, and `technical`.
+
+Use a stable subject slug for the same fact over time. Updating a subject replaces only its current topic text and retains all source links. The archived memories remain unchanged.
+
+### Overview
+
+`memory.md` is allowed to grow. It contains links to every topic and a newest-first journal with date, topic, and short description. It is a navigation aid, not a duplicate archive.
+
+## Save Memory
 
 Use `save-memory` when:
 
-- The user explicitly asks to remember, save, store, note, or keep something for later.
-- The assistant determines that newly provided information is useful durable context.
-- The user corrects or clarifies durable personal/project preferences.
+- The user explicitly asks to remember or save something.
+- New information is clearly durable and useful in future interactions.
+- The user corrects durable information already held in memory.
 
-### Parameters
+Before saving, read `memory.md` and the relevant existing topic when needed to choose the correct topic, stable subject, and current wording. The LLM, not the script, is responsible for understanding meaning and resolving corrections.
 
-```yaml
-memory:
-  type: string
-  required: true
-  description: The concise memory text to save. Must be stored as one single-line bullet point.
-date:
-  type: string
-  required: false
-  default: current system/container local date
-  description: ISO date YYYY-MM-DD for the daily memory file. Defaults to today's date in system/container local time.
-```
+Provide:
 
-### Behavior
-
-1. Ensure `/workspace/memory/` exists.
-2. Determine the effective date and timestamp using system/container local time.
-3. Ensure the effective daily markdown file and `/workspace/memory/memory.md` exist.
-4. Normalize the memory text by trimming whitespace and replacing internal newlines with spaces.
-5. Store it as one bullet line: `- <YYYY-MM-DDTHH:MM> | <memory>`.
-6. Avoid duplicates by comparing memory text without timestamp prefix against existing bullet entries in the effective daily file and in `/workspace/memory/memory.md`.
-7. Append the bullet line to the daily file and to `/workspace/memory/memory.md`.
-8. Keep `/workspace/memory/memory.md` at or below `60000` characters by removing oldest memories first before appending.
-9. Never trim daily files.
-10. Return a short success message including the written daily file path.
-
-## Tool: `read-memory`
-
-Use `read-memory` when:
-
-- The user asks whether the assistant remembers something.
-- The user asks about previous remembered facts or preferences.
-- The assistant cannot complete a prompt because it may be missing remembered context.
-- The assistant should double-check whether relevant information exists in memory.
-
-### Parameters
-
-```yaml
-target:
-  type: string
-  required: false
-  default: memory.md
-  description: Which memory markdown file to read. Use `memory.md` by default, or `YYYY-MM-DD.md` for a specific day.
-start_date:
-  type: string
-  required: false
-  description: ISO date YYYY-MM-DD. Used for date ranges such as last week.
-end_date:
-  type: string
-  required: false
-  description: ISO date YYYY-MM-DD. Used with start_date for inclusive date ranges.
-```
-
-### Behavior
-
-1. By default, read `/workspace/memory/memory.md`.
-2. If the user asks about memories for a specific date, read `/workspace/memory/YYYY-MM-DD.md` for that date.
-3. If the user asks about a date range, read every existing `/workspace/memory/YYYY-MM-DD.md` file in the inclusive range and skip missing daily files.
-4. Return raw relevant markdown bullet lines with file/date context where useful.
-5. If the requested file does not exist, return an empty memory result rather than inventing content.
-
-## Invocation policy
-
-- If the user says something like "remember that...", "save this", "note that...", or "keep in mind...", call `save-memory`.
-- If newly provided information appears durable and useful for future interactions, call `save-memory` unless the user clearly does not want it saved.
-- If the user asks "do you remember...", "what did I tell you about...", "what was my preference...", or similar, call `read-memory` first.
-- If missing context may be in memory, call `read-memory` before asking the user to repeat themselves.
-- Prefer reading `memory.md` unless the user explicitly refers to a specific day or date range.
-
-## Minimal implementation contract
-
-From this skill directory (the directory containing `SKILL.md`):
+- `memory`: Complete historical statement for the daily archive.
+- `topic`: Existing or carefully chosen lowercase topic slug.
+- `subject`: Stable lowercase subject slug within that topic.
+- `current`: Concise current understanding of that subject. It may contain Markdown and should incorporate still-valid prior information.
+- `journal`: Short description of what was stored or changed.
+- `date`: Optional archive date in `YYYY-MM-DD` format.
 
 ```text
-python scripts/memory_tool.py read-memory --target memory.md
-python scripts/memory_tool.py read-memory --start-date 2026-05-03 --end-date 2026-05-09
-python scripts/memory_tool.py save-memory --memory "The user prefers concise answers."
+python scripts/memory_tool.py save-memory \
+  --memory "The user corrected that their dog's name is Rocky, not Jacky." \
+  --topic personal \
+  --subject dog \
+  --current "The user's dog is named Rocky." \
+  --journal "Updated the name of the user's dog."
 ```
 
-The implementation preserves the logical two-tool surface: `read-memory` and `save-memory`.
+If only `--memory` is supplied, the tool still preserves it safely under the `inbox` topic. Prefer the full form for useful retrieval.
+
+## Read Memory
+
+For general or missing context:
+
+1. Read `memory.md`.
+2. Follow the most relevant topic link and read that topic.
+3. Follow archive sources when history, wording, or chronology matters.
+4. Ask the user to repeat information only after checking relevant memory.
+
+Commands:
+
+```text
+python scripts/memory_tool.py read-memory
+python scripts/memory_tool.py read-memory --topic personal
+python scripts/memory_tool.py read-memory --target 2026-08-25.md
+python scripts/memory_tool.py read-memory --start-date 2026-08-01 --end-date 2026-08-25
+```
+
+Return only the memory content relevant to the user's request. Do not invent missing memories. Reading a legacy daily file remains supported until migration.
+
+## Migration
+
+Only migrate existing memories when the user explicitly asks for migration to the current structure. Before doing so, read and follow `references/migration.md`.
+
+Never start, suggest, or perform a migration merely because an older memory structure exists.
