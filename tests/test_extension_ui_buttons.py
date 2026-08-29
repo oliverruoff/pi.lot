@@ -10,6 +10,7 @@ from pilot.app import PilotApp
 
 def _make_app() -> PilotApp:
     app = PilotApp.__new__(PilotApp)
+    app.cfg = MagicMock(telegram_parse_mode="")
     app.main_user_id = 7
     app.main_chat_id = 12345
     app.pending_ui = None
@@ -92,6 +93,35 @@ async def test_select_request_removes_progress_reply_and_stops_typing():
         call(12345, 51),
     ])
     assert app.current_reply is None
+
+
+@pytest.mark.asyncio
+async def test_select_request_preserves_answer_before_question():
+    app = _make_app()
+    app.current_reply = MagicMock(
+        chat_id=12345,
+        main_message_id=50,
+        extra_message_ids=[],
+    )
+    app.current_text = "Hier ist die eigentliche Antwort."
+
+    await app._handle_extension_ui_request({
+        "id": "request-1",
+        "method": "select",
+        "title": "Möchtest du noch ein Beispiel?",
+        "options": ["Ja, bitte"],
+    })
+
+    assert app.app.bot.send_message.await_args_list[0].args == (
+        12345,
+        "Hier ist die eigentliche Antwort.",
+    )
+    assert app.app.bot.send_message.await_args_list[1].args == (
+        12345,
+        "Möchtest du noch ein Beispiel?",
+    )
+    app.app.bot.delete_message.assert_awaited_once_with(12345, 50)
+    assert app.current_text == ""
 
 
 @pytest.mark.asyncio

@@ -1121,22 +1121,29 @@ class PilotApp:
         }
 
     async def _pause_for_ui(self) -> None:
-        """Stop transient output while pi waits for a Telegram answer."""
+        """Preserve completed text and stop transient output for a UI question."""
         if self.typing_task:
             self.typing_task.cancel()
             self.typing_task = None
 
         if self.current_reply and self.app:
-            for message_id in [
-                self.current_reply.main_message_id,
-                *self.current_reply.extra_message_ids,
-            ]:
-                if message_id is None:
-                    continue
-                try:
-                    await self.app.bot.delete_message(self.current_reply.chat_id, message_id)
-                except Exception:
-                    log.debug("could not clear pre-question reply", exc_info=True)
+            answer = strip_thinking_blocks(self.current_text.strip())
+            if answer:
+                # A model may provide a useful answer and then call ask_user for
+                # an optional follow-up. Finalize that answer before rendering
+                # the question so the question does not replace its context.
+                await self.send_final_reply(answer)
+            else:
+                for message_id in [
+                    self.current_reply.main_message_id,
+                    *self.current_reply.extra_message_ids,
+                ]:
+                    if message_id is None:
+                        continue
+                    try:
+                        await self.app.bot.delete_message(self.current_reply.chat_id, message_id)
+                    except Exception:
+                        log.debug("could not clear pre-question reply", exc_info=True)
         self.current_reply = None
         self.current_text = ""
         self.current_thinking = ""
