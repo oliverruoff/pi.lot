@@ -91,9 +91,12 @@ fi
 
 if [ "$BACKUP_ENABLED" = "true" ]; then
   mkdir -p "$BACKUP_DIR"
-  BACKUP_FILE="$BACKUP_DIR/${CONTAINER_NAME}-workspace-$(date '+%Y%m%d-%H%M%S').tar.gz"
+  BACKUP_FILE="$BACKUP_DIR/${CONTAINER_NAME}-workspace.tar.gz"
+  BACKUP_TMP="$BACKUP_FILE.tmp"
   log "Backing up workspace to $BACKUP_FILE"
-  tar -czf "$BACKUP_FILE" -C "$WORKSPACE_DIR" .
+  tar -czf "$BACKUP_TMP" -C "$WORKSPACE_DIR" .
+  mv "$BACKUP_TMP" "$BACKUP_FILE"
+  find "$BACKUP_DIR" -maxdepth 1 -type f -name "${CONTAINER_NAME}-workspace-[0-9]*.tar.gz" -delete
 fi
 
 log "Building Docker image ${IMAGE_NAME}:${IMAGE_TAG}"
