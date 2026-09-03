@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 WORKSPACE_SKILLS_DIR = "/workspace/skills"
 DEFAULT_DATA_DIR = "/workspace/data"
 DEFAULT_WORKDIR = "/workspace"
+DEFAULT_BEHAVIOR_PATH = "/workspace/BEHAVIOR.md"
+DEFAULT_BEHAVIOR_TEMPLATE_PATH = "/app/BEHAVIOR.md"
 DEFAULT_PI_COMMAND = "pi"
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_PARSE_MODE = "MarkdownV2"
@@ -30,6 +32,7 @@ class Config:
     data_dir: str
     main_user_id: int | None = None
     main_chat_id: int | None = None
+    behavior_prompt_path: str = ""
 
 
 def _env(*keys: str) -> str | None:
@@ -41,16 +44,21 @@ def _env(*keys: str) -> str | None:
     return None
 
 
-def _read_behavior(default: str | None = None) -> str:
-    direct = os.getenv("PILOT_BEHAVIOR_PROMPT")
-    if direct is not None:
-        return direct
+def _load_behavior(persisted: dict) -> tuple[str, str]:
+    """Load the behavior file, creating it once from legacy configuration."""
+    path = Path(DEFAULT_BEHAVIOR_PATH)
+    if path.exists():
+        return path.read_text(encoding="utf-8"), str(path)
 
-    path = os.getenv("PILOT_BEHAVIOR_PROMPT_PATH") or os.getenv("BEHAVIOR_PROMPT_PATH")
-    if path:
-        return Path(path).read_text(encoding="utf-8")
-
-    return default or "You are pi.lot, a helpful AI coding assistant connected through Telegram."
+    template = Path(DEFAULT_BEHAVIOR_TEMPLATE_PATH)
+    prompt = persisted.get("behavior_prompt")
+    if not prompt and template.exists():
+        prompt = template.read_text(encoding="utf-8")
+    if not prompt:
+        prompt = "You are pi.lot, a helpful personal assistant available through Telegram."
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(prompt).rstrip() + "\n", encoding="utf-8")
+    return str(prompt), str(path)
 
 
 def _load_persisted_config(data_dir: str) -> dict:
@@ -93,7 +101,9 @@ def persist_config(cfg: Config) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(asdict(cfg), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    data = asdict(cfg)
+    data.pop("behavior_prompt", None)
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
 
 
@@ -110,13 +120,14 @@ def load_config() -> Config:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
 
     workdir = _env("PILOT_WORKDIR", "WORKDIR") or persisted.get("workdir") or DEFAULT_WORKDIR
+    behavior_prompt, behavior_prompt_path = _load_behavior(persisted)
     pi_command = _env("PI_COMMAND") or persisted.get("pi_command") or DEFAULT_PI_COMMAND
     pi_args = _build_pi_args(persisted)
 
     cfg = Config(
         telegram_bot_token=str(token),
         workdir=str(workdir),
-        behavior_prompt=_read_behavior(persisted.get("behavior_prompt")),
+        behavior_prompt=behavior_prompt,
         log_level=_env("LOG_LEVEL") or persisted.get("log_level") or DEFAULT_LOG_LEVEL,
         pi_command=str(pi_command),
         pi_args=pi_args,
@@ -124,6 +135,7 @@ def load_config() -> Config:
         data_dir=data_dir,
         main_user_id=_as_int(persisted.get("main_user_id")),
         main_chat_id=_as_int(persisted.get("main_chat_id")),
+        behavior_prompt_path=behavior_prompt_path,
     )
 
     persist_config(cfg)

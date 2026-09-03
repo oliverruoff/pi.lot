@@ -124,6 +124,7 @@ class PilotApp:
         self.current_status = ""
 
         self.behavior_prompt = cfg.behavior_prompt
+        self.behavior_file = Path(cfg.behavior_prompt_path or Path(cfg.workdir) / "BEHAVIOR.md")
         self.inject_behavior_next = True
 
         self.sessions: dict[int, str] = {}
@@ -296,6 +297,7 @@ class PilotApp:
             return True
 
         if cmd == "/behavior":
+            self._load_behavior()
             await context.bot.send_message(chat_id, self.behavior_prompt)
             return True
 
@@ -388,6 +390,7 @@ class PilotApp:
             return
 
         self.behavior_prompt = arg
+        self._save_behavior()
         self.inject_behavior_next = True
         self._save_config()
         await context.bot.send_message(
@@ -572,11 +575,11 @@ class PilotApp:
 
     def _build_prompt(self, item: WorkItem) -> str:
         prompt = item.prompt
-        if item.cronjob_id:
+        if item.cronjob_id or self.inject_behavior_next:
+            self._load_behavior()
             prompt = f"{self.behavior_prompt}\n\nUser prompt:\n{prompt}"
-        elif self.inject_behavior_next:
-            prompt = f"{self.behavior_prompt}\n\nUser prompt:\n{prompt}"
-            self.inject_behavior_next = False
+            if not item.cronjob_id:
+                self.inject_behavior_next = False
         return prompt
 
     # ------------------------------------------------------------------
@@ -1032,6 +1035,22 @@ class PilotApp:
             persist_config(self.cfg)
         except Exception:
             log.exception("failed to save config file")
+
+    def _load_behavior(self) -> None:
+        """Refresh behavior at the start of a new session."""
+        try:
+            self.behavior_prompt = self.behavior_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            log.exception("failed to read behavior file %s", self.behavior_file)
+
+    def _save_behavior(self) -> None:
+        try:
+            self.behavior_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.behavior_file.with_suffix(self.behavior_file.suffix + ".tmp")
+            tmp.write_text(self.behavior_prompt.rstrip() + "\n", encoding="utf-8")
+            tmp.replace(self.behavior_file)
+        except Exception:
+            log.exception("failed to save behavior file %s", self.behavior_file)
 
     def _load_sessions_at_startup(self) -> None:
         try:

@@ -111,11 +111,17 @@ Your bot is now live. Message it on Telegram — you are automatically the first
 Make sure to mount the `/workspace` directory as a volume (see examples above). It contains:
 
 - Your pi sessions (conversation history)
+- Your `BEHAVIOR.md` prompt
 - Your personal skills
 - Saved memories
 - Cronjobs and received files
 
 Without this volume, all data is lost when the container restarts.
+
+The behavior prompt lives exclusively in `/workspace/BEHAVIOR.md` (typically
+`./workspace/BEHAVIOR.md` on the host). It is initialized from the bundled
+default, then read again for every new session. You can edit it directly or use
+`/behavior_change`.
 
 ---
 
@@ -139,7 +145,6 @@ pi needs access to an AI model to respond. You can use any model supported by th
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PILOT_BEHAVIOR_PROMPT` | *built-in default* | How should pi behave? E.g. "You are a friendly helper who answers briefly." |
 | `LOG_LEVEL` | `INFO` | Log detail level (`DEBUG`, `INFO`, `WARNING`) |
 | `GITHUB_PAT` | — | GitHub Personal Access Token, if pi should create pull requests or access repos |
 

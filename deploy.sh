@@ -77,6 +77,18 @@ if grep -Eq '^PILOT_DATA_DIR=/data(/|$)?' "$ENV_FILE"; then
   log "WARNING: $ENV_FILE sets PILOT_DATA_DIR=/data, but this script mounts $WORKSPACE_DIR to /workspace. Change PILOT_DATA_DIR to /workspace/data or mount /data too."
 fi
 
+if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
+  log "Stopping existing container $CONTAINER_NAME"
+  docker stop --time "$STOP_TIMEOUT" "$CONTAINER_NAME" >/dev/null || true
+
+  # Preserve the active behavior prompt even if the previous deployment used
+  # a different workspace mount. Existing files in the target workspace win.
+  if [ ! -f "$WORKSPACE_DIR/BEHAVIOR.md" ]; then
+    log "Copying the existing behavior prompt into $WORKSPACE_DIR"
+    docker cp "$CONTAINER_NAME:/workspace/BEHAVIOR.md" "$WORKSPACE_DIR/BEHAVIOR.md" 2>/dev/null || true
+  fi
+fi
+
 if [ "$BACKUP_ENABLED" = "true" ]; then
   mkdir -p "$BACKUP_DIR"
   BACKUP_FILE="$BACKUP_DIR/${CONTAINER_NAME}-workspace-$(date '+%Y%m%d-%H%M%S').tar.gz"
@@ -91,8 +103,6 @@ log "Building Docker image ${IMAGE_NAME}:${IMAGE_TAG}"
 docker build --pull --build-arg "CACHEBUST=$(date +%s)" -t "${IMAGE_NAME}:${IMAGE_TAG}" "$APP_DIR"
 
 if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
-  log "Stopping existing container $CONTAINER_NAME"
-  docker stop --time "$STOP_TIMEOUT" "$CONTAINER_NAME" >/dev/null || true
   log "Removing existing container $CONTAINER_NAME"
   docker rm "$CONTAINER_NAME" >/dev/null || true
 fi

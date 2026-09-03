@@ -128,6 +128,26 @@ async def test_new_reports_the_session_id(app):
     )
 
 
+def test_behavior_file_is_reloaded_for_new_session(app):
+    app.behavior_file.write_text("Updated behavior\n", encoding="utf-8")
+    app.inject_behavior_next = True
+
+    prompt = app._build_prompt(WorkItem("Hello"))
+
+    assert prompt == "Updated behavior\n\nUser prompt:\nHello"
+    assert app.inject_behavior_next is False
+
+
+@pytest.mark.asyncio
+async def test_behavior_change_updates_behavior_file(app):
+    context = MagicMock()
+    context.bot.send_message = AsyncMock()
+
+    await app._change_behavior("Be concise.", context)
+
+    assert app.behavior_file.read_text(encoding="utf-8") == "Be concise.\n"
+
+
 @pytest.mark.asyncio
 async def test_new_aborts_run_waiting_for_pending_ui_before_it_is_queued(app):
     context = MagicMock()

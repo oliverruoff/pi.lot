@@ -50,6 +50,7 @@ RUN ln -s /workspace/skills /root/.pi/agent/skills
 COPY pilot/pi_extensions/ /root/.pi/agent/extensions/
 
 WORKDIR /app
+COPY pilot/BEHAVIOR.md ./BEHAVIOR.md
 COPY pilot/requirements.txt ./
 # CACHEBUST again: see comment above the npm install.
 # Note: we deliberately do NOT pass --upgrade to the requirements install — the
