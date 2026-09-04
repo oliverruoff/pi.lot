@@ -33,6 +33,7 @@ from .assistant_messages import extract_error, extract_text, extract_thinking, s
 from .config import Config, load_config, persist_config
 from .models import ReplyHandle, WorkItem
 from .pi_rpc import PiRPC
+from .restore_restart import watch_restore_requests
 from .session_info import read_session_info
 from .telegram_format import format_for_telegram
 
@@ -165,6 +166,7 @@ class PilotApp:
         asyncio.create_task(self.worker())
         asyncio.create_task(self.prompt_inbox_watcher())
         asyncio.create_task(self.telegram_file_outbox_watcher())
+        asyncio.create_task(watch_restore_requests(self))
 
         await self.app.initialize()
         await self.app.start()

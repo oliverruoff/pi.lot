@@ -163,6 +163,7 @@ Skills are extensions that give pi additional capabilities. The following skills
 | **home-assistant** | Controls your smart home (devices, automations) | `HOME_ASSISTANT_TOKEN` (optional `HOME_ASSISTANT_URL`) |
 | **cronjobs** | Creates scheduled tasks and reminders | None |
 | **browser-control** | Controls a browser (open pages, screenshots, clicks) | None |
+| **backup-n-restore** | Sends portable backups through Telegram and safely restores them | None |
 
 > **How to activate a skill:** Just ask pi — e.g. "Search the web for..." or "Read my unread emails". pi automatically detects which skill fits and uses it. If a skill needs an API key and it is missing, pi will tell you.
 
