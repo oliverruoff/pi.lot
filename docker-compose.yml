@@ -1,0 +1,17 @@
+services:
+  pi-lot:
+    build:
+      context: .
+      args:
+        CACHEBUST: ${CACHEBUST:-unset}
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-Europe/Zurich}
+    volumes:
+      - ./workspace:/workspace
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    restart: unless-stopped
+    # Uncomment if integrations require a fixed Docker container name.
+    # container_name: pi-lot
