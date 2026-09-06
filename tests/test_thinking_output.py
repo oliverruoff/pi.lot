@@ -7,6 +7,25 @@ from pilot.app import PilotApp
 
 
 @pytest.mark.asyncio
+async def test_retry_clears_failed_attempt_before_streaming():
+    app = PilotApp.__new__(PilotApp)
+    app.current_text = "Error: Upstream idle timeout exceeded"
+    app.current_thinking = "Old reasoning"
+    app.current_status = ""
+    app.update_reply = AsyncMock()
+    await app._handle_auto_retry_start(
+        {"attempt": 1, "maxAttempts": 2, "delayMs": 20000}
+    )
+    assert app.current_text == ""
+    assert app.current_thinking == ""
+    assert "retrying 1/2" in app.current_status
+    await app._handle_message_update(
+        {"assistantMessageEvent": {"type": "text_delta", "delta": "Recovered"}}
+    )
+    assert app.current_text == "Recovered"
+
+
+@pytest.mark.asyncio
 async def test_thinking_is_streamed():
     app = PilotApp.__new__(PilotApp)
     app.current_text = ""

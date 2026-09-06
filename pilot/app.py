@@ -676,6 +676,8 @@ class PilotApp:
         await self.update_reply(self._compose_display())
 
     async def _handle_auto_retry_start(self, event: dict[str, Any]) -> None:
+        self.current_text = ""
+        self.current_thinking = ""
         attempt = event.get("attempt")
         max_attempts = event.get("maxAttempts")
         delay_ms = event.get("delayMs") or 0

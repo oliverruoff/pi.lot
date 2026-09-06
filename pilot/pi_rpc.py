@@ -325,12 +325,12 @@ class PiRPC:
                 log.exception("pi event handler failed")
             finally:
                 typ = msg.get("type")
-                if typ == "agent_end":
+                # agent_end only finishes one attempt; pi may still retry,
+                # compact, or continue queued work before agent_settled.
+                if typ == "agent_settled":
                     self._agent_finished = True
                     if self._agent_done:
                         self._agent_done.set()
-                if typ == "auto_retry_end" and msg.get("success") is False and self._agent_done:
-                    self._agent_done.set()
                 self._event_queue.task_done()
 
     async def _read_stderr(self) -> None:
