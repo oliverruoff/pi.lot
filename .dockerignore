@@ -1,0 +1,12 @@
+# Runtime data mounted into the container — never part of the build context.
+workspace/
+
+# Secrets and local configuration overrides.
+.env
+.env.*
+
+# Not needed inside the image.
+.git
+*.tar.gz
+__pycache__/
+*.pyc
