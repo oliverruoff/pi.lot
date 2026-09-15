@@ -138,6 +138,62 @@ async def test_idle_watcher_skips_running_prompt(app):
 
 
 @pytest.mark.asyncio
+async def test_idle_watcher_keeps_unused_session(app):
+    """A brand-new, message-less session stays active instead of rotating."""
+    session_file = Path(app.cfg.data_dir) / "session1.jsonl"
+    session_file.write_text(
+        '{"type":"session","id":"a"}\n'
+        '{"type":"model_change","id":"b"}\n',
+        encoding="utf-8",
+    )
+    app.sessions[1] = str(session_file)
+    app.active_session_no = 1
+    _make_idle(app)
+
+    triggered = await app._maybe_start_idle_session()
+
+    assert triggered is False
+    assert app.queue.empty()
+    # The idle timer restarts so the watcher does not re-inspect every tick.
+    assert app.last_activity > time.monotonic() - 5
+
+
+@pytest.mark.asyncio
+async def test_idle_watcher_keeps_session_with_missing_file(app):
+    """A session file that was never persisted counts as unused."""
+    app.sessions[1] = str(Path(app.cfg.data_dir) / "never-written.jsonl")
+    app.active_session_no = 1
+    _make_idle(app)
+
+    triggered = await app._maybe_start_idle_session()
+
+    assert triggered is False
+    assert app.queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_idle_watcher_rotates_used_session(app):
+    """A session that already contains a message rotates like before."""
+    session_file = Path(app.cfg.data_dir) / "session1.jsonl"
+    session_file.write_text(
+        '{"type":"session","id":"a"}\n'
+        '{"type":"message","id":"c","message":{"role":"user",'
+        '"content":[{"type":"text","text":"Hallo"}]}}\n',
+        encoding="utf-8",
+    )
+    app.sessions[1] = str(session_file)
+    app.active_session_no = 1
+    _make_idle(app)
+
+    triggered = await app._maybe_start_idle_session()
+
+    assert triggered is True
+    item = await app.queue.get()
+    assert item.command == "/new"
+    app.queue.task_done()
+
+
+@pytest.mark.asyncio
 async def test_idle_watcher_cancels_pending_ui_like_new(app):
     _make_idle(app)
     app.busy = True
