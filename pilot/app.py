@@ -449,12 +449,41 @@ class PilotApp:
             await self.pi.restart()
             await self._remember_current_session()
 
+    def _active_session_has_messages(self) -> bool:
+        """True when the active pi session already contains messages.
+
+        A brand-new, never-used session must not be auto-rotated: otherwise
+        every expired timeout would pile up another empty session during long
+        idle periods (e.g. while nobody chats for days).
+        """
+        if self.active_session_no is None:
+            return True  # unknown session: rotate like before
+        path = self.sessions.get(self.active_session_no)
+        if not path:
+            return True
+        try:
+            with Path(path).open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        entry = json.loads(line)
+                    except Exception:
+                        continue
+                    if entry.get("type") == "message":
+                        return True
+        except FileNotFoundError:
+            return False  # nothing persisted yet -> unused session
+        except Exception:
+            log.exception("failed to inspect session file %s", path)
+            return True
+        return False
+
     async def _maybe_start_idle_session(self) -> bool:
         """Start a new session like /new once the inactivity timeout expired.
 
         Returns True when an automatic reset was triggered. Never interrupts a
         running prompt; a pending extension UI question is cancelled exactly
-        like the /new command would cancel it.
+        like the /new command would cancel it. An unused (message-less)
+        session is kept active instead of being rotated.
         """
         timeout = self.session_timeout_seconds
         if timeout is None:
@@ -464,6 +493,12 @@ class PilotApp:
             # last_activity when it completes.
             return False
         if time.monotonic() - self.last_activity < timeout:
+            return False
+
+        if not self._active_session_has_messages():
+            # Keep the empty session as the active one and restart the idle
+            # timer so we do not re-inspect it every check interval.
+            self.last_activity = time.monotonic()
             return False
 
         log.info(
