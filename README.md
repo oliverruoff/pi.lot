@@ -146,6 +146,7 @@ pi needs access to an AI model to respond. You can use any model supported by th
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LOG_LEVEL` | `INFO` | Log detail level (`DEBUG`, `INFO`, `WARNING`) |
+| `PILOT_SESSION_TIMEOUT_MINUTES` | `360` | Minutes of chat inactivity before pi.lot automatically starts a new session (exactly like `/new`). `-1` disables the automatic reset and sessions stay active forever. Invalid values (e.g. `0`) fall back to the default. |
 | `GITHUB_PAT` | — | GitHub Personal Access Token, if pi should create pull requests or access repos |
 
 ---
@@ -219,6 +220,13 @@ A session is a single conversation with pi. You can run multiple sessions in par
 - Sessions are stored under **`/workspace/data/pi-sessions`**.
 - Cronjobs automatically start their own session and report the result to you.
 - Afterwards, your previously active session is restored.
+
+### Automatic session reset after inactivity
+
+By default, pi.lot starts a fresh session after **6 hours** without any chat activity — exactly as if you had sent `/new` yourself (including the "Session ID" message). The countdown restarts with every message you send and after every completed answer.
+
+- A running answer is never interrupted; the reset happens only while the bot is idle.
+- Set `PILOT_SESSION_TIMEOUT_MINUTES=120` for a 2-hour timeout, or `-1` to keep sessions active forever (previous behavior).
 
 ---
 

@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -95,6 +96,9 @@ _MAX_STATUS_LEN = 1000
 _FILE_OUTBOX_INTERVAL = 1.0
 _PROMPT_INBOX_INTERVAL = 2.0
 
+# How often the idle-session watcher checks the inactivity timeout.
+_SESSION_TIMEOUT_CHECK_INTERVAL = 30.0
+
 # ---------------------------------------------------------------------------
 # Main application
 # ---------------------------------------------------------------------------
@@ -132,6 +136,13 @@ class PilotApp:
         self.active_session_no: int | None = None
         self.pending_ui: dict[str, Any] | None = None
 
+        # Automatically start a new session after configurable inactivity.
+        # ``None`` disables the auto reset (PILOT_SESSION_TIMEOUT_MINUTES=-1).
+        self.session_timeout_seconds: float | None = (
+            None if cfg.session_timeout_minutes < 0 else cfg.session_timeout_minutes * 60.0
+        )
+        self.last_activity = time.monotonic()
+
         # All mutable files live below the configured persistent data folder.
         data_dir = Path(cfg.data_dir)
         self.auth_file = data_dir / "auth.json"
@@ -166,6 +177,7 @@ class PilotApp:
         asyncio.create_task(self.worker())
         asyncio.create_task(self.prompt_inbox_watcher())
         asyncio.create_task(self.telegram_file_outbox_watcher())
+        asyncio.create_task(self.session_timeout_watcher())
         asyncio.create_task(watch_restore_requests(self))
 
         await self.app.initialize()
@@ -213,6 +225,9 @@ class PilotApp:
         if user_id != self.main_user_id:
             await context.bot.send_message(chat_id, "This pi.lot instance is already bound to another user.")
             return
+
+        # Any message from the authorized user counts as chat activity.
+        self.last_activity = time.monotonic()
 
         msg = update.effective_message
         text = (msg.text or msg.caption) if msg else None
@@ -434,6 +449,45 @@ class PilotApp:
             await self.pi.restart()
             await self._remember_current_session()
 
+    async def _maybe_start_idle_session(self) -> bool:
+        """Start a new session like /new once the inactivity timeout expired.
+
+        Returns True when an automatic reset was triggered. Never interrupts a
+        running prompt; a pending extension UI question is cancelled exactly
+        like the /new command would cancel it.
+        """
+        timeout = self.session_timeout_seconds
+        if timeout is None:
+            return False
+        if self.busy and not self.pending_ui:
+            # Let the running item finish first; the worker refreshes
+            # last_activity when it completes.
+            return False
+        if time.monotonic() - self.last_activity < timeout:
+            return False
+
+        log.info(
+            "no chat activity for %.0f minutes; starting a new session automatically",
+            (time.monotonic() - self.last_activity) / 60.0,
+        )
+        # Reset the timer before enqueueing so the watcher cannot double-fire
+        # while the /new work item waits in the queue.
+        self.last_activity = time.monotonic()
+        if self.pending_ui:
+            await self._cancel_pending_ui()
+            await self._abort_for_new_session()
+        await self.queue.put(WorkItem("", command="/new"))
+        return True
+
+    async def session_timeout_watcher(self) -> None:
+        """Periodically check the inactivity timeout and reset the session."""
+        while True:
+            await asyncio.sleep(_SESSION_TIMEOUT_CHECK_INTERVAL)
+            try:
+                await self._maybe_start_idle_session()
+            except Exception:
+                log.exception("failed to auto-start a new session after inactivity")
+
     def _clear_queue(self) -> int:
         cleared = 0
         while True:
@@ -507,6 +561,9 @@ class PilotApp:
                     self.typing_task = None
                 self.current_reply = None
                 self.busy = False
+                # The bot's own answer counts as activity too, so the idle
+                # timer only runs after the full exchange has settled.
+                self.last_activity = time.monotonic()
                 self.queue.task_done()
 
     async def _process_work_item(

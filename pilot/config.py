@@ -18,6 +18,8 @@ DEFAULT_BEHAVIOR_TEMPLATE_PATH = "/app/BEHAVIOR.md"
 DEFAULT_PI_COMMAND = "pi"
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_PARSE_MODE = "MarkdownV2"
+# Minutes of chat inactivity before pi.lot starts a new session (-1 = never).
+DEFAULT_SESSION_TIMEOUT_MINUTES = 360
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,7 @@ class Config:
     main_user_id: int | None = None
     main_chat_id: int | None = None
     behavior_prompt_path: str = ""
+    session_timeout_minutes: int = DEFAULT_SESSION_TIMEOUT_MINUTES
 
 
 def _env(*keys: str) -> str | None:
@@ -78,6 +81,18 @@ def _as_int(value: object) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _load_session_timeout(persisted: dict) -> int:
+    """Resolve the inactivity timeout from the environment or persisted config."""
+    raw = _env("PILOT_SESSION_TIMEOUT_MINUTES")
+    if raw is None:
+        raw = persisted.get("session_timeout_minutes")
+    value = _as_int(raw)
+    # Only -1 (never reset) and positive minute values are valid.
+    if value is None or (value < 1 and value != -1):
+        return DEFAULT_SESSION_TIMEOUT_MINUTES
+    return value
 
 
 def _build_pi_args(persisted: dict) -> list[str]:
@@ -136,6 +151,7 @@ def load_config() -> Config:
         main_user_id=_as_int(persisted.get("main_user_id")),
         main_chat_id=_as_int(persisted.get("main_chat_id")),
         behavior_prompt_path=behavior_prompt_path,
+        session_timeout_minutes=_load_session_timeout(persisted),
     )
 
     persist_config(cfg)
