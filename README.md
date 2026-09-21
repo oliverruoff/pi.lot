@@ -16,7 +16,8 @@
 
 - [What does pi.lot do?](#what-does-pilot-do)
 - [How it works](#how-it-works)
-- [Quick Start](#quick-start)
+- [Quick Start (Docker Compose — recommended)](#quick-start-docker-compose--recommended)
+- [Alternative deployment methods](#alternative-deployment-methods)
 - [Important Settings](#important-settings)
 - [Bundled Skills](#bundled-skills)
 - [Adding Custom Skills](#adding-custom-skills)
@@ -64,11 +65,58 @@ with the bridge through pi or the small file inboxes under `/workspace/data`.
 
 ---
 
-## Quick Start
+## Quick Start (Docker Compose — recommended)
+
+> **Prerequisites:** Install Docker Desktop or OrbStack on macOS, or Docker Engine with Compose v2 on Linux. You also need a [Telegram bot token](https://core.telegram.org/bots/tutorial#obtain-your-bot-token) from [@BotFather](https://t.me/botfather).
+
+```bash
+git clone https://github.com/oliverruoff/pi.lot.git
+cd pi.lot
+cp .env.example .env       # fill in TELEGRAM_BOT_TOKEN (+ optional API keys)
+docker compose up -d
+docker compose logs -f
+```
+
+`.env` is the only file you need to edit. The container restarts automatically, and `./workspace` is mounted at `/workspace` so sessions, memory, skills, cronjobs, and logs survive container replacement.
+
+### Updating / redeploying
+
+For a full update, including a workspace backup and a fresh dependency build, use:
+
+```bash
+./deploy.sh
+```
+
+`deploy.sh` remains the maintainer-oriented update path; Docker Compose is the simpler first-run path. Alternatively, update an existing Compose installation with `git pull && docker compose up -d --build`. The Dockerfile's `CACHEBUST` argument defaults to a stable value, so Compose can reuse dependency layers. To force the same fresh dependency fetch as `deploy.sh`, run:
+
+```bash
+CACHEBUST=$(date +%s) docker compose build --pull
+docker compose up -d
+```
+
+### Stopping / wiping
+
+```bash
+docker compose down       # stop and remove the container
+docker compose down -v    # also remove Compose-managed named volumes
+```
+
+The default `./workspace` bind mount is **not** removed by either command. To wipe your persistent pi.lot data, delete `./workspace` manually; this cannot be undone.
+
+### Troubleshooting
+
+- **Missing `TELEGRAM_BOT_TOKEN`:** copy `.env.example` to `.env`, replace the placeholder token, and run `docker compose up -d` again.
+- **Port conflict:** pi.lot publishes no host ports by default. Check any custom Compose overrides and remove or change their `ports` entries.
+- **`./workspace` permission error:** create it with `mkdir -p workspace`, ensure your user and Docker can write to it, then restart the service.
+- **Timezone mount error:** `/etc/localtime` and `/etc/timezone` are mounted read-only from the host. If your host does not provide one of these files, remove that mount; the `TZ` value still applies.
+
+---
+
+## Alternative deployment methods
 
 > **Prerequisite:** You need a [Telegram bot token](https://core.telegram.org/bots/tutorial#obtain-your-bot-token). Message [@BotFather](https://t.me/botfather) in Telegram to create one.
 
-### Option 1: Using `deploy.sh` (recommended)
+### Option 1: Using `deploy.sh` (updating / redeploying)
 
 ```bash
 # 1. Clone the repo
