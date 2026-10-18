@@ -258,7 +258,7 @@ async def test_user_message_refreshes_activity(app):
 
     class FakeUpdate:
         effective_user = MagicMock(id=42)
-        effective_chat = MagicMock(id=12345)
+        effective_chat = MagicMock(id=12345, type="private")
         effective_message = MagicMock(
             text="/sessions", caption=None, document=None, photo=None,
             effective_attachment=None,

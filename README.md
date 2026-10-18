@@ -208,6 +208,21 @@ pi.lot understands a few direct commands. Just type them in the chat:
 | `/behavior_change <text>` | Changes how pi behaves in future sessions |
 | `/stop` | Aborts the current response and clears the queue |
 | `/help` | Shows this help |
+| `/adduser <name>` | Creates a single-use recipient invitation, valid for 24 hours |
+| `/users` | Lists contacts and pending invitations |
+| `/removeuser <name>` | Removes a contact or revokes an invitation |
+
+To send messages to someone else, use `/adduser Anna` and share the returned
+link with Anna. Once she opens it and presses **Start**, you can ask pi:
+“Send Anna a message that I will be ten minutes late.” pi uses
+`list_telegram_contacts` and `send_telegram_message` to queue the message.
+Only registered recipients can receive messages; delivery errors are reported
+to the main user. Contacts and invitations persist in `data/contacts.json`.
+
+Recipients cannot instruct pi or access your session. They can use `/stop` to
+unsubscribe; for the main user, `/stop` still aborts the current run.
+Invitations work only in private chats. Expired invitations can be removed and
+recreated with `/removeuser` and `/adduser`.
 
 All other commands (e.g. `/login`, `/model`, `/settings`, `/skill:name`) are forwarded directly to pi.
 
