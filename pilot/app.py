@@ -32,6 +32,7 @@ from telegram.ext import (
 
 from .assistant_messages import extract_error, extract_text, extract_thinking, strip_thinking_blocks
 from .config import Config, load_config, persist_config
+from .contacts import Contacts
 from .models import ReplyHandle, WorkItem
 from .pi_rpc import PiRPC
 from .restore_restart import watch_restore_requests
@@ -59,6 +60,9 @@ HELP_TEXT = """pi.lot commands:
 /behavior - Show current behavior prompt
 /behavior_change <string> - Change behavior prompt
 /stop - Abort current pi run and clear queued prompts
+/adduser <name> - Create a single-use invitation (valid for 24 hours)
+/users - List contacts and pending invitations
+/removeuser <name> - Remove a contact or invitation
 
 Unknown slash commands are forwarded to pi (for example /login, /model, /skill:name)."""
 
@@ -87,6 +91,9 @@ _MY_COMMANDS = [
     BotCommand("behavior", "Show the current behavior prompt"),
     BotCommand("behavior_change", "Change the behavior prompt: /behavior_change <text>"),
     BotCommand("stop", "Abort the current run and clear the queue"),
+    BotCommand("adduser", "Invite a recipient: /adduser <name>"),
+    BotCommand("users", "List contacts and invitations"),
+    BotCommand("removeuser", "Remove a recipient: /removeuser <name>"),
 ]
 
 # Max length for cronjob status strings.
@@ -146,6 +153,7 @@ class PilotApp:
         # All mutable files live below the configured persistent data folder.
         data_dir = Path(cfg.data_dir)
         self.auth_file = data_dir / "auth.json"
+        self.contacts = Contacts(data_dir / "contacts.json")
         self.prompt_inbox_dir = data_dir / "prompt_inbox"
         self.telegram_file_outbox_dir = data_dir / "telegram_file_outbox"
         self.files_received_dir = data_dir / "files_received"
@@ -159,6 +167,7 @@ class PilotApp:
         self._load_auth()
         self._load_sessions_at_startup()
         os.environ["PILOT_TELEGRAM_FILE_OUTBOX"] = str(self.telegram_file_outbox_dir)
+        os.environ["PILOT_TELEGRAM_CONTACTS"] = str(self.contacts.path)
 
         await self.pi.start()
         await self._remember_current_session()
@@ -209,6 +218,26 @@ class PilotApp:
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
 
+        msg = update.effective_message
+        text = ((msg.text or msg.caption) if msg else None) or ""
+        command, _, argument = text.partition(" ")
+        command = command.split("@", 1)[0]
+
+        if update.effective_chat.type != "private":
+            return
+
+        if command == "/start" and argument:
+            try:
+                if self.main_user_id is None or user_id == self.main_user_id:
+                    raise ValueError("Invitations are for recipients, not the main user.")
+                name = self.contacts.accept(argument.strip(), chat_id)
+            except ValueError as error:
+                await context.bot.send_message(chat_id, str(error))
+                return
+            await context.bot.send_message(chat_id, "Registered! You can now receive messages. Use /stop to unsubscribe.")
+            await context.bot.send_message(self.main_chat_id, f"{name} is now registered.")
+            return
+
         if self.main_user_id is None:
             self.main_user_id = user_id
             self.main_chat_id = chat_id
@@ -223,14 +252,15 @@ class PilotApp:
             return
 
         if user_id != self.main_user_id:
-            await context.bot.send_message(chat_id, "This pi.lot instance is already bound to another user.")
+            if command == "/stop":
+                self.contacts.unsubscribe(chat_id)
+                await context.bot.send_message(chat_id, "Unsubscribed. You will no longer receive messages.")
+                return
+            await context.bot.send_message(chat_id, "This bot only accepts instructions from its main user. Recipients can use /stop to unsubscribe.")
             return
 
         # Any message from the authorized user counts as chat activity.
         self.last_activity = time.monotonic()
-
-        msg = update.effective_message
-        text = (msg.text or msg.caption) if msg else None
 
         # Handle file downloads first.
         received_file = await self._download_incoming_file(msg, context) if msg else None
@@ -294,6 +324,27 @@ class PilotApp:
             return True
 
         cmd, _, arg = text.partition(" ")
+        cmd = cmd.split("@", 1)[0]
+        arg = arg.strip()
+
+        if cmd in {"/adduser", "/users", "/removeuser"}:
+            try:
+                if cmd == "/adduser":
+                    bot = await context.bot.get_me()
+                    token = self.contacts.invite(arg)
+                    reply = f"Invitation for {arg} (single use, valid for 24 hours):\nhttps://t.me/{bot.username}?start={token}"
+                elif cmd == "/removeuser":
+                    self.contacts.remove(arg)
+                    reply = f"Removed {arg}."
+                else:
+                    reply = "\n".join(
+                        f"{name} — {'registered' if 'chat_id' in entry else 'invitation (24h limit)'}"
+                        for name, entry in self.contacts.entries.items()
+                    ) or "No contacts. Use /adduser <name> to invite someone."
+            except ValueError as error:
+                reply = str(error)
+            await context.bot.send_message(chat_id, reply)
+            return True
 
         if cmd in {"/help", "/?"}:
             await self._send_help(context)
@@ -350,6 +401,8 @@ class PilotApp:
         if query is None:
             return
         await query.answer()
+        if not update.effective_user or update.effective_user.id != self.main_user_id:
+            return
 
         data = (query.data or "").strip()
         if data.startswith("ui:"):
@@ -997,6 +1050,14 @@ class PilotApp:
                 break
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
+                if "recipient" in data:
+                    chat_id = self.contacts.chat_id(str(data["recipient"]))
+                    # Do not redirect queued messages if a contact name is reused.
+                    if chat_id != data["chat_id"]:
+                        raise ValueError("Contact registration changed; message was not sent.")
+                    await self.app.bot.send_message(chat_id, data["text"])
+                    path.unlink(missing_ok=True)
+                    continue
                 file_path = Path(str(data.get("path") or ""))
                 if not file_path.is_file():
                     raise ValueError(f"not a file: {file_path}")
@@ -1011,13 +1072,13 @@ class PilotApp:
                     )
                 path.unlink(missing_ok=True)
             except Exception as e:
-                log.exception("failed to send Telegram file request %s", path)
+                log.exception("failed to send Telegram request %s", path)
                 try:
                     path.rename(path.with_suffix(".error"))
                 except Exception:
                     pass
                 if self.main_chat_id and self.app:
-                    await self.app.bot.send_message(self.main_chat_id, f"Telegram file send error: {e}")
+                    await self.app.bot.send_message(self.main_chat_id, f"Telegram delivery error: {e}")
 
     # ------------------------------------------------------------------
     # Prompt inbox watcher

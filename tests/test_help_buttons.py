@@ -11,6 +11,7 @@ from pilot.app import PilotApp, _BUTTON_COMMANDS, _MY_COMMANDS
 
 def _make_app() -> PilotApp:
     app = PilotApp.__new__(PilotApp)
+    app.main_user_id = 12345
     app.main_chat_id = 12345
     app.app = MagicMock()
     app.app.bot = MagicMock()
@@ -72,6 +73,7 @@ async def test_help_button_click_runs_command_and_hides_keyboard():
 
     update = MagicMock()
     update.callback_query = query
+    update.effective_user.id = 12345
 
     await app.on_callback_query(update, context)
 
@@ -94,6 +96,7 @@ async def test_help_button_with_unknown_callback_is_ignored():
 
     update = MagicMock()
     update.callback_query = query
+    update.effective_user.id = 12345
 
     await app.on_callback_query(update, context)
 
@@ -112,6 +115,9 @@ def test_my_commands_lists_all_pilot_commands():
         "behavior",
         "behavior_change",
         "stop",
+        "adduser",
+        "users",
+        "removeuser",
     }
     # Telegram only accepts [a-z0-9_] for command names, so /? cannot be
     # registered. Make sure no invalid name slips in.
