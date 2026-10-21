@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, type Model, type Api } from "@earendil-works/pi-ai";
 
 // Keep credentials, model defaults and capability checks in pi itself.
@@ -60,33 +60,37 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify("Usage: /connect [openrouter|openai-codex]", "error");
       return;
     }
-    const auth = ctx.modelRegistry.authStorage;
-    if (ctx.modelRegistry.getProviderAuthStatus(provider).configured &&
-        !await ctx.ui.confirm("Provider already connected", "Replace its credentials? Choose No to keep them and select a model.")) {
-      // Existing env or stored credentials can be used without entering them again.
-    } else if (provider === "openrouter") {
-      const key = await ctx.ui.input("OpenRouter API key (sent through Telegram; /cancel to cancel)");
-      if (!key?.trim()) return;
-      auth.set(provider, { type: "api_key", key: key.trim() });
-    } else {
-      const input = async (title: string) => {
-        const value = await ctx.ui.input(title);
-        if (!value) throw new Error("Login cancelled");
-        return value;
-      };
-      await auth.login(provider, {
+    const reuse = ctx.modelRegistry.getProviderAuthStatus(provider).configured &&
+      !await ctx.ui.confirm("Provider already connected", "Replace its credentials? Choose No to keep them and select a model.");
+    if (!reuse) {
+      // Use pi's native login orchestration and its default persistent credential store.
+      const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+      await runtime.login(provider, provider === "openrouter" ? "api_key" : "oauth", {
         signal: AbortSignal.timeout(5 * 60 * 1000),
-        onAuth: info => ctx.ui.notify(`${info.url}\n${info.instructions ?? ""}`),
-        onDeviceCode: info => ctx.ui.notify(`Open ${info.verificationUri}\nCode: ${info.userCode}\nLogin expires after a few minutes.`),
-        onPrompt: prompt => input(prompt.message),
-        onManualCodeInput: () => input("Paste the complete callback URL from your browser (/cancel to cancel)"),
-        onSelect: async prompt => {
-          const selected = await ctx.ui.select(prompt.message, prompt.options.map(o => o.label));
-          return prompt.options.find(o => o.label === selected)?.id;
+        async prompt(prompt) {
+          let value: string | undefined;
+          if (prompt.type === "select") {
+            const selected = await ctx.ui.select(prompt.message, prompt.options.map(o => o.label), { signal: prompt.signal });
+            value = prompt.options.find(o => o.label === selected)?.id;
+          } else {
+            const title = prompt.type === "secret" ? `${prompt.message} (sent through Telegram; /cancel to cancel)` : prompt.message;
+            value = await ctx.ui.input(title, prompt.placeholder, { signal: prompt.signal });
+          }
+          if (!value?.trim()) throw new Error("Login cancelled");
+          return value.trim();
+        },
+        notify(event) {
+          if (event.type === "auth_url") {
+            ctx.ui.notify(`${event.url}\n${event.instructions ?? ""}`);
+          } else if (event.type === "device_code") {
+            ctx.ui.notify(`Open ${event.verificationUri}\nCode: ${event.userCode}\nLogin expires after a few minutes.`);
+          } else if (event.type === "info") {
+            ctx.ui.notify([event.message, ...(event.links ?? []).map(link => link.url)].join("\n"));
+          }
         },
       });
     }
-    ctx.modelRegistry.refresh();
+    await ctx.modelRegistry.refresh();
     ctx.ui.notify(`Connected: ${provider}. Select a model next.`);
     const selected = await model(ctx, "", provider);
     if (selected) await thinking(ctx, "", selected);

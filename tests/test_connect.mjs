@@ -6,14 +6,18 @@ import { existsSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 
-const requirePi = createRequire(realpathSync(execFileSync('which', ['pi'], { encoding: 'utf8' }).trim()));
+const piEntry = realpathSync(execFileSync('which', ['pi'], { encoding: 'utf8' }).trim());
+const requirePi = createRequire(piEntry);
+const sdkEntry = resolve(piEntry, '../index.js');
 const { createJiti } = requirePi('jiti');
 const aiEntry = requirePi.resolve.paths('@earendil-works/pi-ai')
   .map(base => resolve(base, '@earendil-works/pi-ai/dist/index.js')).find(existsSync);
 assert.ok(aiEntry, 'pi-ai must be installed alongside pi');
 const jiti = createJiti(import.meta.url, {
-  alias: { '@earendil-works/pi-ai': aiEntry },
+  alias: { '@earendil-works/pi-ai': aiEntry, '@earendil-works/pi-coding-agent': sdkEntry },
 });
+const { ModelRuntime } = await jiti.import(sdkEntry);
+assert.equal(typeof ModelRuntime?.create, 'function', 'tests require pi 1.3 or later');
 const extension = await jiti.import(resolve('pilot/pi_extensions/pilot-connect.ts'), { default: true });
 
 function setup({ reasoning = true, thinkingLevelMap } = {}) {
@@ -22,7 +26,15 @@ function setup({ reasoning = true, thinkingLevelMap } = {}) {
   const notices = [];
   const inputs = [];
   const model = { provider: 'openrouter', id: 'vendor/model', reasoning, thinkingLevelMap };
-  const auth = { set() {}, async login() {} };
+  const auth = {
+    saved: [],
+    async login(provider, type, interaction) {
+      assert.equal(type, 'api_key');
+      const key = await interaction.prompt({ type: 'secret', message: 'API key' });
+      this.saved.push([provider, { type: 'api_key', key }]);
+    },
+  };
+  ModelRuntime.create = async () => auth;
   const ctx = {
     model,
     ui: {
@@ -34,7 +46,6 @@ function setup({ reasoning = true, thinkingLevelMap } = {}) {
     modelRegistry: {
       getAvailable: () => [model],
       getProviderAuthStatus: () => ({ configured: false }),
-      authStorage: auth,
       refresh() {},
     },
   };
@@ -86,36 +97,53 @@ test('model uses full provider/id including nested OpenRouter ID', async () => {
 
 test('OpenRouter connect saves key and runs model/thinking selection', async () => {
   const s = setup();
-  const stored = [];
-  s.auth.set = (...args) => stored.push(args);
   s.inputs.push(' secret ', 'vendor/model', 'low');
   await s.commands.connect('openrouter', s.ctx);
-  assert.deepEqual(stored, [['openrouter', { type: 'api_key', key: 'secret' }]]);
+  assert.deepEqual(s.auth.saved, [['openrouter', { type: 'api_key', key: 'secret' }]]);
   assert.equal(s.level(), 'low');
   assert.ok(!JSON.stringify(s.notices).includes('secret'));
 });
 
 test('cancelled key input leaves credentials untouched', async () => {
   const s = setup();
-  s.auth.set = () => assert.fail('must not store cancelled credentials');
   await s.commands.connect('openrouter', s.ctx);
-  assert.equal(s.notices.length, 0);
+  assert.equal(s.auth.saved.length, 0);
+  assert.equal(s.notices.at(-1)[1], 'error');
 });
 
 test('OpenAI subscription delegates to native OAuth with headless callbacks', async () => {
   const s = setup();
   let loggedIn = false;
-  s.auth.login = async (provider, callbacks) => {
+  s.auth.login = async (provider, type, interaction) => {
+    assert.equal(type, 'oauth');
     assert.equal(provider, 'openai-codex');
     s.inputs.push('Device code login (headless)');
-    assert.equal(await callbacks.onSelect({ message: 'Login method', options: [
+    assert.equal(await interaction.prompt({ type: 'select', message: 'Login method', options: [
       { id: 'device', label: 'Device code login (headless)' },
     ] }), 'device');
-    callbacks.onDeviceCode({ verificationUri: 'https://example.test/login', userCode: 'ABCD' });
-    assert.ok(callbacks.signal instanceof AbortSignal);
+    interaction.notify({ type: 'device_code', verificationUri: 'https://example.test/login', userCode: 'ABCD' });
+    assert.ok(interaction.signal instanceof AbortSignal);
     loggedIn = true;
   };
   await s.commands.connect('openai-codex', s.ctx);
   assert.ok(loggedIn);
   assert.ok(s.notices.some(([text]) => text.includes('ABCD')));
+});
+
+
+test('registry refresh is awaited before listing connected models', async () => {
+  const s = setup();
+  let refreshed = false;
+  s.ctx.modelRegistry.refresh = async () => {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    refreshed = true;
+  };
+  const available = s.ctx.modelRegistry.getAvailable;
+  s.ctx.modelRegistry.getAvailable = () => {
+    assert.ok(refreshed);
+    return available();
+  };
+  s.inputs.push('secret', 'vendor/model', 'low');
+  await s.commands.connect('openrouter', s.ctx);
+  assert.equal(s.level(), 'low');
 });
