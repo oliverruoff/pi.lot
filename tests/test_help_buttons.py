@@ -147,7 +147,7 @@ async def test_configuration_commands_queue_without_model_prompt(command, argume
     app.pi.prompt_and_wait = AsyncMock()
     app._do_prompt = AsyncMock()
     assert await app._process_work_item(item, None) is False
-    app.pi.prompt_and_wait.assert_awaited_once_with(f"/{command} {argument}")
+    app.pi.prompt_and_wait.assert_awaited_once_with(f"/{command} {argument}", timeout=None)
     app._do_prompt.assert_not_called()
 
 

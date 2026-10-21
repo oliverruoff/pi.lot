@@ -673,9 +673,10 @@ class PilotApp:
         if item.command in {"/connect", "/model", "/thinking"}:
             self.configuration_dialog = True
             try:
-                await self.pi.prompt_and_wait(f"{item.command} {item.prompt}".rstrip())
+                await self.pi.prompt_and_wait(f"{item.command} {item.prompt}".rstrip(), timeout=None)
             finally:
                 self.configuration_dialog = False
+                await self._cancel_pending_ui()
             return False
 
         if item.command == "/new":

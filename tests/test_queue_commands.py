@@ -307,3 +307,46 @@ async def test_stop_clears_queued_commands(app):
 
     assert cleared == 2
     assert app.queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_configuration_completion_releases_worker_and_stops_typing(app):
+    from pilot.pi_rpc import PiRPC
+
+    rpc = PiRPC("pi", [], app.cfg.workdir, AsyncMock())
+
+    async def handled(command, **kwargs):
+        rpc._handle_stdout_message({"type": "extension_ui_request", "method": "notify", "message": "Thinking: low"})
+        return {"success": True, "data": {"disposition": "handled"}}
+
+    rpc.send = AsyncMock(side_effect=handled)
+    app.pi = rpc
+    app._do_prompt = AsyncMock(return_value=False)
+    worker = asyncio.create_task(app.worker())
+    try:
+        await app.queue.put(WorkItem("low", command="/thinking"))
+        await app.queue.put(WorkItem("First message after setup"))
+        await asyncio.wait_for(app.queue.join(), timeout=1)
+        app._do_prompt.assert_awaited_once()
+        assert app._do_prompt.call_args.args[0].prompt == "First message after setup"
+        assert app.busy is False
+        assert app.typing_task is None
+        assert app.configuration_dialog is False
+    finally:
+        worker.cancel()
+        try:
+            await worker
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_finished_configuration_clears_stale_dialog_before_next_message(app):
+    app.pending_ui = {"id": "expired-login", "message_id": 99}
+    app.pi.extension_ui_response = AsyncMock()
+
+    await app._process_work_item(WorkItem("low", command="/thinking"), None)
+
+    assert app.pending_ui is None
+    assert app.configuration_dialog is False
+    app.pi.extension_ui_response.assert_awaited_once_with({"id": "expired-login", "cancelled": True})
