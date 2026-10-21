@@ -260,3 +260,33 @@ pi creates the task, saves it in **`/workspace/data/cronjobs.json`**, and handle
 ## Acknowledgements
 
 pi.lot is built on top of the excellent [pi Coding Agent](https://github.com/earendil-works/pi/tree/main/packages/coding-agent). A huge **thank you** to **Earendil Works** for developing this impressive AI coding harness!
+
+
+### Connect and select a model in Telegram
+
+Provider credentials, model and thinking are optional at startup. Run `/connect`
+(or `/connect openrouter` / `/connect openai-codex`) in the authorized private
+Telegram chat. The routine connects the provider, asks for a model ID and then
+shows the model's supported thinking levels. OpenRouter uses an API key;
+`openai-codex` uses pi's native OpenAI subscription OAuth login. Choose the
+headless device-code login for a remote container, or paste the full callback URL
+when using browser login. `/cancel` cancels a dialog; device login expires after
+at most five minutes.
+
+- `/model openrouter/anthropic/claude-sonnet-4.6` selects a connected model.
+- `/model` opens the model input dialog.
+- `/thinking low` sets a supported thinking level. Unsupported values produce an
+  error and leave the previous level unchanged.
+- `/thinking` shows the current level and offers supported levels as buttons.
+
+These commands use pi's model registry, capability checks, credential storage and
+settings. Docker stores pi credentials and settings in `PILOT_DATA_DIR`
+(`pi-auth.json` and `pi-settings.json`) so they survive redeploys. API keys entered
+in Telegram pass through Telegram chat history. OAuth does not require sending
+your OpenAI password to the bot.
+
+For environment-based setup, optionally use the existing
+`PI_ARGS=--provider openrouter --model anthropic/claude-sonnet-4.6 --thinking low`.
+Startup flags override saved selections on each pi restart. Set `PI_ARGS=`
+explicitly to clear any startup flags retained in the bridge configuration and
+keep selections made in Telegram.

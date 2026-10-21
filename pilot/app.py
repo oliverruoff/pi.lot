@@ -54,6 +54,9 @@ def _option_label(option: Any) -> str:
 
 HELP_TEXT = """pi.lot commands:
 /help (alias /?) - Show slash-commands
+/connect [openrouter|openai-codex] - Connect provider, select model and thinking
+/model [provider/model-id] - Select model
+/thinking [level] - Show/select supported thinking level
 /new - New pi session
 /sessions - List known sessions
 /session <id> - Switch to session
@@ -64,7 +67,7 @@ HELP_TEXT = """pi.lot commands:
 /users - List contacts and pending invitations
 /removeuser <name> - Remove a contact or invitation
 
-Unknown slash commands are forwarded to pi (for example /login, /model, /skill:name)."""
+Unknown slash commands are forwarded to pi (for example /skill:name)."""
 
 # Seconds between typing indicator updates.
 _TYPING_INTERVAL = 4.0
@@ -85,6 +88,9 @@ _BUTTON_COMMANDS = [("help", "/?"), "new", "sessions", "behavior", "stop"]
 # /? is an alias for /help but Telegram only accepts [a-z0-9_] for command names.
 _MY_COMMANDS = [
     BotCommand("help", "Show slash-commands (alias: /?)"),
+    BotCommand("connect", "Connect OpenRouter or OpenAI subscription"),
+    BotCommand("model", "Select model: /model provider/model-id"),
+    BotCommand("thinking", "Select thinking level: /thinking low"),
     BotCommand("new", "Start a new pi session"),
     BotCommand("sessions", "List known sessions"),
     BotCommand("session", "Switch to a session: /session <id>"),
@@ -142,6 +148,7 @@ class PilotApp:
         self.sessions: dict[int, str] = {}
         self.active_session_no: int | None = None
         self.pending_ui: dict[str, Any] | None = None
+        self.configuration_dialog = False
 
         # Automatically start a new session after configurable inactivity.
         # ``None`` disables the auto reset (PILOT_SESSION_TIMEOUT_MINUTES=-1).
@@ -344,6 +351,10 @@ class PilotApp:
             except ValueError as error:
                 reply = str(error)
             await context.bot.send_message(chat_id, reply)
+            return True
+
+        if cmd in {"/connect", "/model", "/thinking"}:
+            await self._enqueue_work(WorkItem(arg, command=cmd), context)
             return True
 
         if cmd in {"/help", "/?"}:
@@ -659,6 +670,14 @@ class PilotApp:
         item: WorkItem,
         previous_active: int | None,
     ) -> bool:
+        if item.command in {"/connect", "/model", "/thinking"}:
+            self.configuration_dialog = True
+            try:
+                await self.pi.prompt_and_wait(f"{item.command} {item.prompt}".rstrip())
+            finally:
+                self.configuration_dialog = False
+            return False
+
         if item.command == "/new":
             await self._do_new_session()
             return False
@@ -1327,6 +1346,8 @@ class PilotApp:
 
     async def _resume_after_ui(self) -> None:
         """Start a fresh reply below the user's UI answer."""
+        if getattr(self, "configuration_dialog", False):
+            return
         if not self.main_chat_id or not self.app:
             return
         message = await self.app.bot.send_message(self.main_chat_id, "Thinking…")
