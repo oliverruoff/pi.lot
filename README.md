@@ -288,6 +288,7 @@ your OpenAI password to the bot.
 
 For environment-based setup, optionally use the existing
 `PI_ARGS=--provider openrouter --model anthropic/claude-sonnet-4.6 --thinking low`.
-Startup flags override saved selections on each pi restart. Set `PI_ARGS=`
-explicitly to clear any startup flags retained in the bridge configuration and
-keep selections made in Telegram.
+These flags supply the initial defaults. Once a model or thinking level is
+selected through Telegram, pi.lot saves both in pi's settings and restores that
+selection across new sessions, session switches and process restarts. Saved
+selections take precedence over startup flags until another selection is made.

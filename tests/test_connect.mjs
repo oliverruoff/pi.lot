@@ -16,12 +16,15 @@ assert.ok(aiEntry, 'pi-ai must be installed alongside pi');
 const jiti = createJiti(import.meta.url, {
   alias: { '@earendil-works/pi-ai': aiEntry, '@earendil-works/pi-coding-agent': sdkEntry },
 });
-const { ModelRuntime } = await jiti.import(sdkEntry);
+const { ModelRuntime, SettingsManager } = await jiti.import(sdkEntry);
 assert.equal(typeof ModelRuntime?.create, 'function', 'tests require pi 1.3 or later');
 const extension = await jiti.import(resolve('pilot/pi_extensions/pilot-connect.ts'), { default: true });
 
 function setup({ reasoning = true, thinkingLevelMap } = {}) {
   const commands = {};
+  const handlers = {};
+  const settings = SettingsManager.inMemory();
+  SettingsManager.create = () => settings;
   let level = 'medium';
   const notices = [];
   const inputs = [];
@@ -36,6 +39,7 @@ function setup({ reasoning = true, thinkingLevelMap } = {}) {
   };
   ModelRuntime.create = async () => auth;
   const ctx = {
+    cwd: '/test-workspace',
     model,
     ui: {
       notify: (...args) => notices.push(args),
@@ -45,18 +49,20 @@ function setup({ reasoning = true, thinkingLevelMap } = {}) {
     },
     modelRegistry: {
       getAvailable: () => [model],
+      find: (provider, id) => ctx.modelRegistry.getAvailable().find(m => m.provider === provider && m.id === id),
       getProviderAuthStatus: () => ({ configured: false }),
       refresh() {},
     },
   };
   const pi = {
+    on: (name, handler) => handlers[name] = handler,
     registerCommand: (name, command) => commands[name] = command.handler,
     getThinkingLevel: () => level,
     setThinkingLevel: value => level = value,
     setModel: async value => { ctx.model = value; return true; },
   };
   extension(pi);
-  return { commands, ctx, pi, auth, notices, inputs, level: () => level };
+  return { commands, handlers, settings, ctx, pi, auth, notices, inputs, level: () => level };
 }
 
 test('valid thinking is applied; unknown or unsupported levels leave it unchanged', async () => {
@@ -211,4 +217,84 @@ test('cancelled model picker leaves current model unchanged', async () => {
   await s.commands.model('', s.ctx);
   assert.equal(s.ctx.model, original);
   assert.equal(s.notices.length, 0);
+});
+
+
+test('model and thinking selections are stored together in native pi settings', async () => {
+  const s = setup();
+  await s.commands.model('openrouter/vendor/model', s.ctx);
+  await s.commands.thinking('low', s.ctx);
+  const saved = s.settings.getGlobalSettings();
+  assert.equal(saved.defaultProvider, 'openrouter');
+  assert.equal(saved.defaultModel, 'vendor/model');
+  assert.equal(saved.defaultThinkingLevel, 'low');
+  await s.commands.thinking('invalid', s.ctx);
+  assert.deepEqual(s.settings.getGlobalSettings(), saved);
+});
+
+for (const reason of ['startup', 'new', 'resume', 'reload', 'fork']) {
+  test(`saved selection wins over the initial runtime model on ${reason}`, async () => {
+    const s = setup();
+    await s.commands.model('openrouter/vendor/model', s.ctx);
+    await s.commands.thinking('low', s.ctx);
+    s.ctx.model = { provider: 'startup-provider', id: 'startup-model', reasoning: true };
+    s.pi.setThinkingLevel('high');
+
+    await s.handlers.session_start({ reason }, s.ctx);
+
+    assert.equal(s.ctx.model.provider, 'openrouter');
+    assert.equal(s.ctx.model.id, 'vendor/model');
+    assert.equal(s.level(), 'low');
+  });
+}
+
+test('startup defaults remain active until the first saved selection', async () => {
+  const s = setup();
+  const original = s.ctx.model;
+  await s.handlers.session_start({ reason: 'startup' }, s.ctx);
+  assert.equal(s.ctx.model, original);
+  assert.equal(s.level(), 'medium');
+  assert.equal(s.notices.length, 0);
+});
+
+test('a failed model change does not overwrite the saved selection', async () => {
+  const s = setup();
+  await s.commands.model('openrouter/vendor/model', s.ctx);
+  const saved = s.settings.getGlobalSettings();
+  s.pi.setModel = async () => false;
+  await s.commands.model('openrouter/vendor/model', s.ctx);
+  assert.deepEqual(s.settings.getGlobalSettings(), saved);
+  assert.equal(s.notices.at(-1)[1], 'error');
+});
+
+test('an unavailable saved provider reports a restoration error', async () => {
+  const s = setup();
+  await s.commands.model('openrouter/vendor/model', s.ctx);
+  s.ctx.modelRegistry.find = () => undefined;
+  await s.handlers.session_start({ reason: 'new' }, s.ctx);
+  assert.match(s.notices.at(-1)[0], /Could not restore saved model/);
+  assert.equal(s.notices.at(-1)[1], 'error');
+});
+
+
+test('model changes preserve the chosen thinking level instead of stale runtime defaults', async () => {
+  const s = setup();
+  await s.commands.thinking('low', s.ctx);
+  s.pi.setModel = async value => {
+    s.ctx.model = value;
+    s.pi.setThinkingLevel('high'); // pi's runtime still has the old CLI default.
+    return true;
+  };
+  await s.commands.model('openrouter/vendor/model', s.ctx);
+  assert.equal(s.level(), 'low');
+  assert.equal(s.settings.getGlobalSettings().defaultThinkingLevel, 'low');
+});
+
+
+test('a settings write failure is reported without claiming the selection was saved', async () => {
+  const s = setup();
+  s.settings.drainErrors = () => [{ message: 'write failed' }];
+  await s.commands.thinking('low', s.ctx);
+  assert.match(s.notices.at(-1)[0], /could not be saved/);
+  assert.equal(s.notices.at(-1)[1], 'error');
 });

@@ -1,8 +1,36 @@
-import { ModelRuntime, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, SettingsManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, type Model, type Api } from "@earendil-works/pi-ai";
 
 // Keep credentials, model defaults and capability checks in pi itself.
 export default function (pi: ExtensionAPI) {
+  async function saveSelection(ctx: ExtensionContext, model: Model<Api>) {
+    const settings = SettingsManager.create(ctx.cwd);
+    settings.setDefaultModelAndProvider(model.provider, model.id);
+    settings.setDefaultThinkingLevel(pi.getThinkingLevel());
+    await settings.flush();
+    if (settings.drainErrors().length) throw new Error("Selection applied to this session, but could not be saved. Please retry.");
+  }
+
+  // pi recreates its runtime on session changes and reapplies CLI defaults.
+  // The last Telegram selection takes precedence, including on process restart.
+  pi.on("session_start", async (_event, ctx) => {
+    const saved = SettingsManager.create(ctx.cwd).getGlobalSettings();
+    if (!saved.defaultProvider || !saved.defaultModel) return;
+    const selected = ctx.modelRegistry.find(saved.defaultProvider, saved.defaultModel);
+    try {
+      if (!selected || !await pi.setModel(selected)) throw new Error("Saved model unavailable");
+      if (saved.defaultThinkingLevel !== undefined) {
+        if (getSupportedThinkingLevels(selected).includes(saved.defaultThinkingLevel)) {
+          pi.setThinkingLevel(saved.defaultThinkingLevel);
+        } else {
+          ctx.ui.notify(`Saved thinking '${saved.defaultThinkingLevel}' is no longer supported by ${selected.provider}/${selected.id}. Current thinking: ${pi.getThinkingLevel()}.`, "warning");
+        }
+      }
+    } catch {
+      ctx.ui.notify(`Could not restore saved model ${saved.defaultProvider}/${saved.defaultModel}. Check /connect before continuing.`, "error");
+    }
+  });
+
   async function selectPaged(ctx: ExtensionCommandContext, title: string, options: string[]) {
     const pageSize = 6;
     let page = 0;
@@ -28,7 +56,8 @@ export default function (pi: ExtensionAPI) {
       throw new Error(`Thinking '${selected}' is not supported by ${model.provider}/${model.id}. Allowed: ${levels.join(", ")}. Thinking unchanged.`);
     }
     pi.setThinkingLevel(selected as typeof levels[number]);
-    ctx.ui.notify(`Thinking: ${pi.getThinkingLevel()}`);
+    await saveSelection(ctx, model);
+    ctx.ui.notify(`Thinking: ${pi.getThinkingLevel()} (saved)`);
   }
 
   async function model(ctx: ExtensionCommandContext, value: string, provider?: string): Promise<Model<Api> | undefined> {
@@ -46,8 +75,11 @@ export default function (pi: ExtensionAPI) {
     const match = models.find(m => `${m.provider}/${m.id}` === selected ||
       (m.id === selected && (provider || m.provider === ctx.model?.provider)));
     if (!match) throw new Error("Unknown model or provider not connected. Use /connect, then /model provider/model-id.");
+    const level = pi.getThinkingLevel();
     if (!await pi.setModel(match)) throw new Error("Model could not be selected. Check the provider credentials.");
-    ctx.ui.notify(`Model: ${match.provider}/${match.id}. Thinking: ${pi.getThinkingLevel()}`);
+    pi.setThinkingLevel(level); // Preserve the active level, clamped to the new model.
+    await saveSelection(ctx, match);
+    ctx.ui.notify(`Model: ${match.provider}/${match.id}. Thinking: ${pi.getThinkingLevel()} (saved)`);
     return match;
   }
 
