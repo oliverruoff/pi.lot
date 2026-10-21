@@ -68,3 +68,31 @@ async def test_agent_end_without_retry_still_waits_for_compaction():
         dispatcher.cancel()
         with suppress(asyncio.CancelledError):
             await dispatcher
+
+
+@pytest.mark.asyncio
+async def test_handled_dialog_finishes_without_settled_and_next_prompt_runs():
+    rpc = PiRPC("pi", [], "/tmp", AsyncMock())
+    rpc._event_queue = asyncio.Queue()
+    dispatcher = asyncio.create_task(rpc._dispatch_events())
+
+    async def send(command, **kwargs):
+        if command["message"] == "/model":
+            assert kwargs["timeout"] is None
+            rpc._handle_stdout_message({"type": "extension_ui_request", "method": "notify", "message": "Model selected"})
+            return {"success": True, "data": {"disposition": "handled"}}
+        rpc._handle_stdout_message({"type": "agent_start"})
+        rpc._handle_stdout_message({"type": "agent_settled"})
+        return {"success": True, "data": {"disposition": "started"}}
+
+    rpc.send = AsyncMock(side_effect=send)
+    try:
+        await asyncio.wait_for(rpc.prompt_and_wait("/model", timeout=None), timeout=1)
+        assert rpc._agent_done is None
+        await asyncio.wait_for(rpc.prompt_and_wait("Hello after setup"), timeout=1)
+        assert rpc._agent_finished
+        assert rpc.send.await_count == 2
+    finally:
+        dispatcher.cancel()
+        with suppress(asyncio.CancelledError):
+            await dispatcher

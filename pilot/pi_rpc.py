@@ -132,7 +132,7 @@ class PiRPC:
         self,
         cmd: dict[str, Any],
         wait_response: bool = True,
-        timeout: float = _DEFAULT_CMD_TIMEOUT,
+        timeout: float | None = _DEFAULT_CMD_TIMEOUT,
     ) -> dict[str, Any] | None:
         if not self._is_proc_running():
             log.warning("pi RPC process is not running; restarting")
@@ -168,6 +168,7 @@ class PiRPC:
         self,
         message: str,
         streaming_behavior: str | None = None,
+        timeout: float | None = _PROMPT_TIMEOUT,
     ) -> None:
         self._reset_agent_tracking()
 
@@ -175,10 +176,16 @@ class PiRPC:
         if streaming_behavior:
             cmd["streamingBehavior"] = streaming_behavior
 
-        resp = await self.send(cmd, timeout=_PROMPT_TIMEOUT)
+        resp = await self.send(cmd, timeout=timeout)
         if resp and not resp.get("success", False):
             self._agent_done = None
             raise RuntimeError(resp.get("error", "pi prompt failed"))
+
+        # Extension commands finish at the RPC response, without an agent run
+        # or agent_settled event. Waiting for one would block the worker forever.
+        if resp and (resp.get("data") or {}).get("disposition") == "handled":
+            self._agent_done = None
+            return
 
         await self._wait_for_agent_done()
 

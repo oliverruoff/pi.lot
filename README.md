@@ -266,15 +266,16 @@ pi.lot is built on top of the excellent [pi Coding Agent](https://github.com/ear
 
 Provider credentials, model and thinking are optional at startup. Run `/connect`
 (or `/connect openrouter` / `/connect openai-codex`) in the authorized private
-Telegram chat. The routine connects the provider, asks for a model ID and then
-shows the model's supported thinking levels. OpenRouter uses an API key;
+Telegram chat. The routine connects the provider, shows available models as
+paged buttons and then shows the model's supported thinking levels. OpenRouter uses an API key;
 `openai-codex` uses pi's native OpenAI subscription OAuth login. Choose the
-headless device-code login for a remote container, or paste the full callback URL
+headless device-code login for a remote container: tap **Code kopieren** in Telegram,
+then paste the code on the OpenAI page. Alternatively, paste the full callback URL
 when using browser login. `/cancel` cancels a dialog; device login expires after
 at most five minutes.
 
 - `/model openrouter/anthropic/claude-sonnet-4.6` selects a connected model.
-- `/model` opens the model input dialog.
+- `/model` opens the provider/model button picker.
 - `/thinking low` sets a supported thinking level. Unsupported values produce an
   error and leave the previous level unchanged.
 - `/thinking` shows the current level and offers supported levels as buttons.

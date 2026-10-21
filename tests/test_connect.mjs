@@ -97,7 +97,15 @@ test('model uses full provider/id including nested OpenRouter ID', async () => {
 
 test('OpenRouter connect saves key and runs model/thinking selection', async () => {
   const s = setup();
-  s.inputs.push(' secret ', 'vendor/model', 'low');
+  s.ctx.ui.input = async () => ' secret ';
+  s.ctx.ui.select = async (title, options) => {
+    if (title.startsWith('Select model')) {
+      assert.deepEqual(options, ['vendor/model']);
+      return 'vendor/model';
+    }
+    assert.ok(options.includes('low'));
+    return 'low';
+  };
   await s.commands.connect('openrouter', s.ctx);
   assert.deepEqual(s.auth.saved, [['openrouter', { type: 'api_key', key: 'secret' }]]);
   assert.equal(s.level(), 'low');
@@ -146,4 +154,61 @@ test('registry refresh is awaited before listing connected models', async () => 
   s.inputs.push('secret', 'vendor/model', 'low');
   await s.commands.connect('openrouter', s.ctx);
   assert.equal(s.level(), 'low');
+});
+
+
+test('model dialog offers available IDs as buttons, without text input', async () => {
+  const s = setup();
+  s.ctx.ui.input = async () => assert.fail('model selection must use buttons');
+  s.ctx.ui.select = async (title, options) => {
+    assert.match(title, /Select model \(openrouter\)/);
+    assert.deepEqual(options, ['vendor/model']);
+    return options[0];
+  };
+  await s.commands.model('', s.ctx);
+  assert.ok(s.notices.some(([text]) => text.startsWith('Model: openrouter/vendor/model')));
+});
+
+test('large model catalog has paged buttons with forward and back navigation', async () => {
+  const s = setup();
+  s.ctx.modelRegistry.getAvailable = () => Array.from({ length: 15 }, (_, i) => ({
+    provider: 'openai-codex', id: `model-${i}`, reasoning: true,
+  }));
+  let page = 0;
+  s.ctx.ui.select = async (title, options) => {
+    assert.ok(options.length <= 8);
+    assert.match(title, /openai-codex/);
+    if (page++ === 0) {
+      assert.ok(options.includes('model-0'));
+      return 'Next →';
+    }
+    if (page === 2) {
+      assert.ok(options.includes('model-6'));
+      return '← Previous';
+    }
+    assert.ok(options.includes('model-0'));
+    return 'model-2';
+  };
+  await s.commands.model('', s.ctx);
+  assert.equal(s.ctx.model.id, 'model-2');
+  assert.equal(s.ctx.model.provider, 'openai-codex');
+});
+
+test('model dialog lets user select a connected provider before its models', async () => {
+  const s = setup();
+  s.ctx.modelRegistry.getAvailable = () => [
+    s.ctx.model, { provider: 'openai-codex', id: 'subscription-model', reasoning: true },
+  ];
+  s.inputs.push('openai-codex', 'subscription-model');
+  await s.commands.model('', s.ctx);
+  assert.equal(s.ctx.model.provider, 'openai-codex');
+  assert.equal(s.ctx.model.id, 'subscription-model');
+});
+
+test('cancelled model picker leaves current model unchanged', async () => {
+  const s = setup();
+  const original = s.ctx.model;
+  await s.commands.model('', s.ctx);
+  assert.equal(s.ctx.model, original);
+  assert.equal(s.notices.length, 0);
 });

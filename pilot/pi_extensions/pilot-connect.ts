@@ -3,6 +3,20 @@ import { getSupportedThinkingLevels, type Model, type Api } from "@earendil-work
 
 // Keep credentials, model defaults and capability checks in pi itself.
 export default function (pi: ExtensionAPI) {
+  async function selectPaged(ctx: ExtensionCommandContext, title: string, options: string[]) {
+    const pageSize = 6;
+    let page = 0;
+    while (true) {
+      const choices = options.slice(page * pageSize, (page + 1) * pageSize);
+      if (page > 0) choices.push("← Previous");
+      if ((page + 1) * pageSize < options.length) choices.push("Next →");
+      const selected = await ctx.ui.select(`${title} (${page + 1}/${Math.ceil(options.length / pageSize)})`, choices);
+      if (selected === "← Previous") page--;
+      else if (selected === "Next →") page++;
+      else return selected;
+    }
+  }
+
   async function thinking(ctx: ExtensionCommandContext, value: string, model = ctx.model) {
     if (!model) throw new Error("Select a model first with /model.");
     const levels = getSupportedThinkingLevels(model);
@@ -18,11 +32,16 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function model(ctx: ExtensionCommandContext, value: string, provider?: string): Promise<Model<Api> | undefined> {
-    const models = (await ctx.modelRegistry.getAvailable()).filter(m => !provider || m.provider === provider);
-    const selected = value || await ctx.ui.input(
-      `Model${provider ? ` (${provider})` : " (provider/model-id)"}. Current: ${ctx.model?.id ?? "none"}`,
-      models.slice(0, 3).map(m => provider ? m.id : `${m.provider}/${m.id}`).join(", "),
-    );
+    const available = await ctx.modelRegistry.getAvailable();
+    if (!available.length) throw new Error("No connected models available. Use /connect first.");
+    if (!value && !provider) {
+      const providers = [...new Set(available.map(m => m.provider))];
+      provider = providers.length === 1 ? providers[0] : await selectPaged(ctx, "Select provider", providers);
+      if (!provider) return;
+    }
+    const models = available.filter(m => !provider || m.provider === provider);
+    if (!models.length) throw new Error(`No models available for ${provider}.`);
+    const selected = value || await selectPaged(ctx, `Select model (${provider})`, models.map(m => m.id));
     if (!selected) return;
     const match = models.find(m => `${m.provider}/${m.id}` === selected ||
       (m.id === selected && (provider || m.provider === ctx.model?.provider)));

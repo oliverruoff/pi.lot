@@ -212,3 +212,34 @@ async def test_stale_or_foreign_button_is_ignored():
 
     app.pi.extension_ui_response.assert_not_awaited()
     assert app.pending_ui is not None
+
+
+@pytest.mark.asyncio
+async def test_device_login_notification_copies_only_the_code_without_answering_dialog():
+    app = _make_app()
+    pending = {"id": "existing-question", "options": ["A"]}
+    app.pending_ui = pending
+    message = "Open https://auth.openai.com/codex/device\nCode: ABCD-EFGH\nLogin expires after a few minutes."
+
+    await app._handle_extension_ui_request({"method": "notify", "message": message})
+
+    args, kwargs = app.app.bot.send_message.call_args
+    assert args == (12345, message)
+    buttons = kwargs["reply_markup"].to_dict()["inline_keyboard"]
+    assert buttons == [[{"text": "Code kopieren", "copy_text": {"text": "ABCD-EFGH"}}]]
+    assert app.pending_ui is pending
+    app.pi.extension_ui_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", [
+    "Connected: openai-codex. Select a model next.",
+    "Open https://example.test\nCode: \nLogin expires after a few minutes.",
+    "Open https://example.test\nCode: " + "X" * 257,
+])
+async def test_other_notifications_remain_plain_text(message):
+    app = _make_app()
+
+    await app._handle_extension_ui_request({"method": "notify", "message": message})
+
+    app.app.bot.send_message.assert_awaited_once_with(12345, message, reply_markup=None)

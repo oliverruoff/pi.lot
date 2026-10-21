@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 from telegram.ext import (
@@ -673,9 +673,10 @@ class PilotApp:
         if item.command in {"/connect", "/model", "/thinking"}:
             self.configuration_dialog = True
             try:
-                await self.pi.prompt_and_wait(f"{item.command} {item.prompt}".rstrip())
+                await self.pi.prompt_and_wait(f"{item.command} {item.prompt}".rstrip(), timeout=None)
             finally:
                 self.configuration_dialog = False
+                await self._cancel_pending_ui()
             return False
 
         if item.command == "/new":
@@ -1284,7 +1285,16 @@ class PilotApp:
         if method in {"notify", "setStatus", "setWidget", "setTitle", "set_editor_text"}:
             msg = event.get("message") or event.get("title") or event.get("statusText")
             if msg:
-                await self.app.bot.send_message(self.main_chat_id, str(msg))
+                markup = None
+                # pi.lot's device-code notification: Open <url> / Code: <code>.
+                lines = str(msg).splitlines()
+                if method == "notify" and len(lines) >= 2 and lines[0].startswith("Open ") and lines[1].startswith("Code: "):
+                    code = lines[1].removeprefix("Code: ").strip()
+                    if 1 <= len(code) <= 256:
+                        markup = InlineKeyboardMarkup([[
+                            InlineKeyboardButton("Code kopieren", copy_text=CopyTextButton(code)),
+                        ]])
+                await self.app.bot.send_message(self.main_chat_id, str(msg), reply_markup=markup)
             return
 
         await self._cancel_pending_ui()
