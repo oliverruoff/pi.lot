@@ -109,6 +109,9 @@ def test_my_commands_lists_all_pilot_commands():
     names = {c.command for c in _MY_COMMANDS}
     assert names == {
         "help",
+        "connect",
+        "model",
+        "thinking",
         "new",
         "sessions",
         "session",
@@ -124,3 +127,33 @@ def test_my_commands_lists_all_pilot_commands():
     for c in _MY_COMMANDS:
         assert c.command.replace("_", "").isalnum()
         assert c.description, f"missing description for /{c.command}"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command,argument", [
+    ("connect", "openrouter"), ("model", "openrouter/vendor/model"), ("thinking", "low"),
+])
+async def test_configuration_commands_queue_without_model_prompt(command, argument):
+    app = _make_app()
+    app._enqueue_work = AsyncMock()
+    context = MagicMock()
+
+    assert await app._handle_pilot_command(f"/{command}@pilot_bot {argument}", context)
+    item, passed_context = app._enqueue_work.call_args.args
+    assert item.command == f"/{command}"
+    assert item.prompt == argument
+    assert passed_context is context
+
+    app.pi = MagicMock()
+    app.pi.prompt_and_wait = AsyncMock()
+    app._do_prompt = AsyncMock()
+    assert await app._process_work_item(item, None) is False
+    app.pi.prompt_and_wait.assert_awaited_once_with(f"/{command} {argument}")
+    app._do_prompt.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_configuration_dialog_does_not_resume_a_thinking_reply():
+    app = _make_app()
+    app.configuration_dialog = True
+    await app._resume_after_ui()
+    app.app.bot.send_message.assert_not_called()

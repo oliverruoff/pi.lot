@@ -60,6 +60,7 @@ ARG CACHEBUST=unset
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 COPY pilot ./pilot
+COPY entrypoint.sh /app/entrypoint.sh
 
 RUN mkdir -p /workspace/data
 
@@ -68,4 +69,4 @@ RUN mkdir -p /workspace/data
 # - start cron
 # - sync cronjobs
 # - start pi.lot
-CMD ["sh", "-c", "set -eu; for ext in /root/.pi/agent/extensions/*.ts; do [ -e \"$ext\" ] || continue; base=${ext##*/}; rm -f \"/workspace/.pi/extensions/$base\"; done; cron; python /root/.pi/agent/skills/cronjobs/scripts/cron_cli.py sync || true; exec python -m pilot"]
+CMD ["sh", "-c", "set -eu; sh /app/entrypoint.sh; for ext in /root/.pi/agent/extensions/*.ts; do [ -e \"$ext\" ] || continue; base=${ext##*/}; rm -f \"/workspace/.pi/extensions/$base\"; done; cron; python /root/.pi/agent/skills/cronjobs/scripts/cron_cli.py sync || true; exec python -m pilot"]
