@@ -269,7 +269,8 @@ Provider credentials, model and thinking are optional at startup. Run `/connect`
 Telegram chat. The routine connects the provider, shows available models as
 paged buttons and then shows the model's supported thinking levels. OpenRouter uses an API key;
 `openai-codex` uses pi's native OpenAI subscription OAuth login. Choose the
-headless device-code login for a remote container, or paste the full callback URL
+headless device-code login for a remote container: tap **Code kopieren** in Telegram,
+then paste the code on the OpenAI page. Alternatively, paste the full callback URL
 when using browser login. `/cancel` cancels a dialog; device login expires after
 at most five minutes.
 
