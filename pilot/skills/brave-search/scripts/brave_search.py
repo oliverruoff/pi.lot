@@ -11,13 +11,9 @@ import os
 import sys
 from typing import Any
 
-try:
-    import requests
-except Exception as exc:  # pragma: no cover
-    requests = None  # type: ignore[assignment]
-    REQUESTS_IMPORT_ERROR = str(exc)
-else:
-    REQUESTS_IMPORT_ERROR = ""
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 
@@ -63,9 +59,23 @@ def headers(key: str) -> dict[str, str]:
     }
 
 
+def fetch(endpoint: str, key: str, params: dict) -> dict[str, Any]:
+    request = Request(f"{API_BASE}/{endpoint}?{urlencode(params)}", headers=headers(key))
+    try:
+        with urlopen(request, timeout=30) as response:
+            data = json.load(response)
+    except HTTPError as exc:
+        die(f"Brave API error {exc.code}: {exc.read().decode('utf-8', errors='replace')}")
+    except (URLError, OSError) as exc:
+        die(f"Brave request failed: {exc}")
+    except (ValueError, UnicodeError):
+        die("Brave returned invalid JSON")
+    if not isinstance(data, dict):
+        die("Brave returned an unexpected response format")
+    return data
+
+
 def search_web(query: str, count: int, offset: int, country: str | None, language: str | None, freshness: str | None) -> dict[str, Any]:
-    if not requests:
-        die(f"requests is required but not installed: {REQUESTS_IMPORT_ERROR}")
     key = api_key()
     params: dict[str, str | int] = {"q": query, "count": count, "offset": offset}
     if country:
@@ -75,10 +85,7 @@ def search_web(query: str, count: int, offset: int, country: str | None, languag
     if freshness:
         params["freshness"] = freshness
 
-    resp = requests.get(f"{API_BASE}/web/search", headers=headers(key), params=params, timeout=30)
-    if resp.status_code != 200:
-        die(f"Brave API error {resp.status_code}: {resp.text}")
-    data = resp.json()
+    data = fetch("web/search", key, params)
     results = []
     for r in data.get("web", {}).get("results", []):
         results.append({
@@ -98,8 +105,6 @@ def search_web(query: str, count: int, offset: int, country: str | None, languag
 
 
 def search_news(query: str, count: int, offset: int, country: str | None, language: str | None, freshness: str | None) -> dict[str, Any]:
-    if not requests:
-        die(f"requests is required but not installed: {REQUESTS_IMPORT_ERROR}")
     key = api_key()
     params: dict[str, str | int] = {"q": query, "count": count, "offset": offset}
     if country:
@@ -109,10 +114,7 @@ def search_news(query: str, count: int, offset: int, country: str | None, langua
     if freshness:
         params["freshness"] = freshness
 
-    resp = requests.get(f"{API_BASE}/news/search", headers=headers(key), params=params, timeout=30)
-    if resp.status_code != 200:
-        die(f"Brave API error {resp.status_code}: {resp.text}")
-    data = resp.json()
+    data = fetch("news/search", key, params)
     results = []
     for r in data.get("results", []):
         results.append({

@@ -34,11 +34,7 @@ Get a free API key at: https://api.search.brave.com/app/
 
 ## First-time setup
 
-This skill is standalone and has no dependency on the host project. From this skill directory (the directory containing `SKILL.md`), install local requirements if they are not already available:
-
-```bash
-python -m pip install -r requirements.txt
-```
+No pip installation is needed. The client uses only the Python standard library, including for HTTPS requests. Configure the API key before running it.
 
 ## CLI
 
@@ -65,7 +61,7 @@ Options:
 - `--language`: Search language code, e.g. `de`, `en`.
 - `--freshness`: Time filter — `pd` (past day), `pw` (past week), `pm` (past month), `py` (past year).
 
-Returns a JSON array of results with `title`, `url`, `description`, `age`, and `extra_snippets`.
+Returns a JSON object with `ok`, `results`, and `total_returned`. Results contain `title`, `url`, `description`, `age`, and `extra_snippets`.
 
 ## News search
 
@@ -73,7 +69,9 @@ Returns a JSON array of results with `title`, `url`, `description`, `age`, and `
 python scripts/brave_search.py news --query "AI regulation" --count 5 --freshness pw
 ```
 
-Options are the same as web search. Returns a JSON array of news results with `title`, `url`, `description`, and `age`.
+Options are the same as web search. Returns a JSON object with `ok`, `results`, and `total_returned`. News results contain `title`, `url`, `description`, and `age`.
+
+On failure the client exits nonzero and prints `{"ok": false, "error": "..."}`. Callers must surface errors rather than treating them as an empty result list.
 
 ## Usage guidelines
 
