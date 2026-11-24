@@ -20,11 +20,12 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# deploy.sh passes CACHEBUST to refresh npm. Pi 1.6.0 supplies the native
-# OpenAI subscription catalog, including GPT-6.2 Astra and GPT-6.2 Sol.
+# CACHEBUST forces this layer (and everything after) to rebuild on every deploy.sh run,
+# so `npm install -g @latest` actually fetches fresh packages instead of being
+# satisfied from Docker's layer cache. deploy.sh passes --build-arg CACHEBUST=$(date +%s).
 ARG CACHEBUST=unset
 RUN npm install -g npm@latest \
-    && npm install -g @earendil-works/pi-coding-agent@1.6.0
+    && npm install -g @earendil-works/pi-coding-agent@latest
 
 RUN mkdir -p /root/.pi/agent/skills /workspace/skills
 
