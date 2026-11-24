@@ -100,9 +100,7 @@ if [ "$BACKUP_ENABLED" = "true" ]; then
 fi
 
 log "Building Docker image ${IMAGE_NAME}:${IMAGE_TAG}"
-# CACHEBUST=$(date +%s) busts the Docker layer cache for the npm install + pip upgrade steps
-# so `npm install -g @latest` actually fetches fresh packages on every redeploy instead of
-# reusing the cached layer from the previous build.
+# Refresh the npm and pip tooling layers on every redeploy.
 docker build --pull --build-arg "CACHEBUST=$(date +%s)" -t "${IMAGE_NAME}:${IMAGE_TAG}" "$APP_DIR"
 
 if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
